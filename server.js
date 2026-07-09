@@ -1,82 +1,185 @@
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 3000;
-const wss = new WebSocket.Server({ port: PORT });
 
-// Almacena jugadores conectados
-const players = new Map();
-let nextId = 1;
+// ✅ FIX Railway — usar http server
+const http   = require('http');
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Servidor online ✅');
+});
+const wss = new WebSocket.Server({ server });
 
-console.log(`🎮 Servidor Godot escuchando en puerto ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🎮 Servidor escuchando en puerto ${PORT}`);
+});
 
+// ══════════════════════════════════════════════
+//  ALMACENAMIENTO
+// ══════════════════════════════════════════════
+const salas   = new Map(); // codigo → { jugadores: Map(nombre → ws) }
+const clientes = new Map(); // ws → { nombre, sala }
+
+// ══════════════════════════════════════════════
+//  GENERAR CÓDIGO DE SALA
+// ══════════════════════════════════════════════
+function generarCodigo() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 5; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  // Evitar duplicados
+  if (salas.has(code)) return generarCodigo();
+  return code;
+}
+
+// ══════════════════════════════════════════════
+//  CONEXIÓN
+// ══════════════════════════════════════════════
 wss.on('connection', (ws) => {
-  const playerId = nextId++;
-  players.set(playerId, { ws, position: { x: 0, y: 0, z: 0 } });
+  console.log('🔌 Cliente conectado');
 
-  console.log(`✅ Jugador ${playerId} conectado. Total: ${players.size}`);
+  clientes.set(ws, { nombre: null, sala: null });
 
-  // Notificar al jugador su ID
-  ws.send(JSON.stringify({
-    type: "welcome",
-    id: playerId
-  }));
+  // Bienvenida
+  ws.send(JSON.stringify({ tipo: 'bienvenido' }));
 
-  // Notificar a todos los demás del nuevo jugador
-  broadcast({
-    type: "player_joined",
-    id: playerId
-  }, playerId);
-
-  // Recibir mensajes del cliente Godot
-  ws.on('message', (data) => {
+  // ── Mensajes ─────────────────────────────────
+  ws.on('message', (raw) => {
     try {
-      const msg = JSON.parse(data);
+      const data = JSON.parse(raw);
+      console.log('📨 Recibido:', data);
 
-      if (msg.type === "position") {
-        // Actualizar posición del jugador
-        const player = players.get(playerId);
-        if (player) player.position = msg.position;
+      switch (data.tipo) {
 
-        // Reenviar a todos los demás
-        broadcast({
-          type: "player_moved",
-          id: playerId,
-          position: msg.position,
-          rotation: msg.rotation
-        }, playerId);
-      }
+        // ── CREAR SALA ──────────────────────────
+        case 'crear': {
+          const nombre = data.nombre || 'Jugador';
+          const codigo = generarCodigo();
 
-      if (msg.type === "action") {
-        broadcast({
-          type: "player_action",
-          id: playerId,
-          action: msg.action
-        }, playerId);
+          // Crear sala
+          salas.set(codigo, { jugadores: new Map() });
+          salas.get(codigo).jugadores.set(nombre, ws);
+
+          // Registrar cliente
+          clientes.set(ws, { nombre, sala: codigo });
+
+          console.log(`🏠 Sala creada: ${codigo} por ${nombre}`);
+
+          ws.send(JSON.stringify({
+            tipo:   'sala_creada',
+            codigo: codigo,
+            nombre: nombre,
+          }));
+          break;
+        }
+
+        // ── UNIRSE A SALA ───────────────────────
+        case 'unir': {
+          const nombre = data.nombre || 'Jugador';
+          const codigo = (data.sala || '').toUpperCase().trim();
+
+          if (!salas.has(codigo)) {
+            ws.send(JSON.stringify({
+              tipo: 'error',
+              msg:  'Sala no encontrada: ' + codigo,
+            }));
+            return;
+          }
+
+          const sala = salas.get(codigo);
+          sala.jugadores.set(nombre, ws);
+          clientes.set(ws, { nombre, sala: codigo });
+
+          console.log(`👤 ${nombre} se unió a sala ${codigo}`);
+
+          ws.send(JSON.stringify({
+            tipo:   'sala_unida',
+            sala:   codigo,
+            nombre: nombre,
+          }));
+
+          // Avisar a los demás
+          broadcastSala(codigo, {
+            tipo:   'jugador_unido',
+            nombre: nombre,
+          }, ws);
+          break;
+        }
+
+        // ── LISTO ───────────────────────────────
+        case 'listo': {
+          const info  = clientes.get(ws);
+          if (!info || !info.sala) return;
+
+          const sala  = salas.get(info.sala);
+          if (!sala) return;
+
+          const total = sala.jugadores.size;
+          console.log(`✅ ${info.nombre} listo. Jugadores en sala: ${total}`);
+
+          // Iniciar si hay 2+ jugadores
+          if (total >= 2) {
+            console.log(`🚀 Iniciando juego en sala ${info.sala}`);
+            broadcastSala(info.sala, { tipo: 'inicio' });
+          }
+          break;
+        }
+
+        // ── POSICIÓN ────────────────────────────
+        case 'pos': {
+          const info = clientes.get(ws);
+          if (!info || !info.sala) return;
+
+          broadcastSala(info.sala, {
+            tipo:   'pos',
+            nombre: data.nombre,
+            x:      data.x,
+            y:      data.y,
+            z:      data.z,
+            rot:    data.rot,
+          }, ws);
+          break;
+        }
       }
 
     } catch (e) {
-      console.error("Error parseando mensaje:", e);
+      console.error('❌ Error parseando:', e);
     }
   });
 
-  // Desconexión
+  // ── Desconexión ───────────────────────────────
   ws.on('close', () => {
-    players.delete(playerId);
-    console.log(`❌ Jugador ${playerId} desconectado. Total: ${players.size}`);
-
-    broadcast({
-      type: "player_left",
-      id: playerId
-    });
+    const info = clientes.get(ws);
+    if (info && info.sala) {
+      const sala = salas.get(info.sala);
+      if (sala) {
+        sala.jugadores.delete(info.nombre);
+        broadcastSala(info.sala, {
+          tipo:   'jugador_salio',
+          nombre: info.nombre,
+        });
+        // Eliminar sala vacía
+        if (sala.jugadores.size === 0) {
+          salas.delete(info.sala);
+          console.log(`🗑 Sala ${info.sala} eliminada`);
+        }
+      }
+    }
+    clientes.delete(ws);
+    console.log('🔴 Cliente desconectado');
   });
 });
 
-// Función para enviar a todos (excepto el que envió)
-function broadcast(message, excludeId = null) {
-  const data = JSON.stringify(message);
-  players.forEach((player, id) => {
-    if (id !== excludeId && player.ws.readyState === WebSocket.OPEN) {
-      player.ws.send(data);
+// ══════════════════════════════════════════════
+function broadcastSala(codigo, mensaje, excluir = null) {
+  const sala = salas.get(codigo);
+  if (!sala) return;
+  const data = JSON.stringify(mensaje);
+  sala.jugadores.forEach((clienteWs) => {
+    if (clienteWs !== excluir && clienteWs.readyState === WebSocket.OPEN) {
+      clienteWs.send(data);
     }
   });
 }
