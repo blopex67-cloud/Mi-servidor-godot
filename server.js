@@ -1,71 +1,82 @@
-const WebSocket = require("ws")
-const wss = new WebSocket.Server({ port: process.env.PORT || 9000 })
+const WebSocket = require('ws');
 
-const salas = {}
+const PORT = process.env.PORT || 3000;
+const wss = new WebSocket.Server({ port: PORT });
 
-function codigo() {
-  return Math.random().toString(36).substring(2,7).toUpperCase()
-}
+// Almacena jugadores conectados
+const players = new Map();
+let nextId = 1;
 
-function broadcast(sala, msg, excepto = null) {
-  const s = salas[sala]
-  if (!s) return
-  for (const [ws, info] of Object.entries(s.jugadores)) {
-    if (ws !== excepto && ws.readyState === 1)
-      ws.send(JSON.stringify(msg))
-  }
-}
+console.log(`🎮 Servidor Godot escuchando en puerto ${PORT}`);
 
-wss.on("connection", ws => {
-  let miNombre = "", miSala = ""
+wss.on('connection', (ws) => {
+  const playerId = nextId++;
+  players.set(playerId, { ws, position: { x: 0, y: 0, z: 0 } });
 
-  ws.send(JSON.stringify({ tipo: "bienvenido" }))
+  console.log(`✅ Jugador ${playerId} conectado. Total: ${players.size}`);
 
-  ws.on("message", raw => {
-    const msg = JSON.parse(raw)
-    miNombre = msg.nombre || miNombre
+  // Notificar al jugador su ID
+  ws.send(JSON.stringify({
+    type: "welcome",
+    id: playerId
+  }));
 
-    if (msg.tipo === "crear") {
-      const cod = codigo()
-      salas[cod] = { jugadores: { [ws]: { nombre: miNombre } }, listos: 0 }
-      miSala = cod
-      ws.send(JSON.stringify({ tipo: "sala_creada", codigo: cod }))
-    }
+  // Notificar a todos los demás del nuevo jugador
+  broadcast({
+    type: "player_joined",
+    id: playerId
+  }, playerId);
 
-    if (msg.tipo === "unir") {
-      const s = salas[msg.sala]
-      if (!s) return ws.send(JSON.stringify({ tipo: "error", msg: "No existe" }))
-      s.jugadores[ws] = { nombre: miNombre }
-      miSala = msg.sala
-      const jugs = {}
-      for (const [_, info] of Object.entries(s.jugadores)) jugs[info.nombre] = info.nombre
-      ws.send(JSON.stringify({ tipo: "sala_unida", sala: miSala, jugadores: jugs }))
-      broadcast(miSala, { tipo: "entro", id: miNombre, nombre: miNombre }, ws)
-    }
+  // Recibir mensajes del cliente Godot
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data);
 
-    if (msg.tipo === "listo") {
-      const s = salas[miSala]
-      if (!s) return
-      s.listos++
-      if (s.listos >= Object.keys(s.jugadores).length) {
-        const jugs = {}
-        for (const [_, i] of Object.entries(s.jugadores)) jugs[i.nombre] = i.nombre
-        broadcast(miSala, { tipo: "inicio", jugadores: jugs })
-        ws.send(JSON.stringify({ tipo: "inicio", jugadores: jugs }))
+      if (msg.type === "position") {
+        // Actualizar posición del jugador
+        const player = players.get(playerId);
+        if (player) player.position = msg.position;
+
+        // Reenviar a todos los demás
+        broadcast({
+          type: "player_moved",
+          id: playerId,
+          position: msg.position,
+          rotation: msg.rotation
+        }, playerId);
       }
-    }
 
-    if (msg.tipo === "pos") {
-      broadcast(miSala, { tipo: "pos", de: miNombre, x: msg.x, y: msg.y, z: msg.z }, ws)
-    }
-  })
+      if (msg.type === "action") {
+        broadcast({
+          type: "player_action",
+          id: playerId,
+          action: msg.action
+        }, playerId);
+      }
 
-  ws.on("close", () => {
-    if (miSala && salas[miSala]) {
-      delete salas[miSala].jugadores[ws]
-      broadcast(miSala, { tipo: "salio", id: miNombre, nombre: miNombre })
+    } catch (e) {
+      console.error("Error parseando mensaje:", e);
     }
-  })
-})
+  });
 
-console.log("Servidor corriendo!")
+  // Desconexión
+  ws.on('close', () => {
+    players.delete(playerId);
+    console.log(`❌ Jugador ${playerId} desconectado. Total: ${players.size}`);
+
+    broadcast({
+      type: "player_left",
+      id: playerId
+    });
+  });
+});
+
+// Función para enviar a todos (excepto el que envió)
+function broadcast(message, excludeId = null) {
+  const data = JSON.stringify(message);
+  players.forEach((player, id) => {
+    if (id !== excludeId && player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(data);
+    }
+  });
+}
