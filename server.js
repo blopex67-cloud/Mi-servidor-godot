@@ -15,7 +15,17 @@ wss.on('connection', (ws) => {
     const spawnX = (Math.random() - 0.5) * 10;
     const spawnZ = (Math.random() - 0.5) * 10;
 
-    players[playerId] = { ws, x: spawnX, y: 1, z: spawnZ, rot: 0, firing: false };
+    // 🔫 ACTUALIZADO: Incluir estado del arma
+    players[playerId] = { 
+        ws, 
+        x: spawnX, 
+        y: 1, 
+        z: spawnZ, 
+        rot: 0, 
+        firing: false,
+        weapon_drawn: false,      // 🔫 NUEVO
+        transitioning: false      // 🔫 NUEVO
+    };
 
     console.log(`✅ Jugador ${playerId} conectado. Total: ${Object.keys(players).length}`);
 
@@ -33,26 +43,30 @@ wss.on('connection', (ws) => {
         const pid = parseInt(id);
         if (pid !== playerId) {
             send(ws, {
-                type:   "player_joined",
-                id:     pid,
-                x:      players[pid].x,
-                y:      players[pid].y,
-                z:      players[pid].z,
-                rot:    players[pid].rot,
-                firing: players[pid].firing
+                type:           "player_joined",
+                id:             pid,
+                x:              players[pid].x,
+                y:              players[pid].y,
+                z:              players[pid].z,
+                rot:            players[pid].rot,
+                firing:         players[pid].firing,
+                weapon_drawn:   players[pid].weapon_drawn,      // 🔫 NUEVO
+                transitioning:  players[pid].transitioning      // 🔫 NUEVO
             });
         }
     });
 
     // ── 3. Notificar a todos que llegó jugador nuevo
     broadcast({
-        type:   "player_joined",
-        id:     playerId,
-        x:      spawnX,
-        y:      1,
-        z:      spawnZ,
-        rot:    0,
-        firing: false
+        type:           "player_joined",
+        id:             playerId,
+        x:              spawnX,
+        y:              1,
+        z:              spawnZ,
+        rot:            0,
+        firing:         false,
+        weapon_drawn:   false,      // 🔫 NUEVO
+        transitioning:  false       // 🔫 NUEVO
     }, playerId);
 
     // ── 4. Recibir mensajes del jugador
@@ -61,20 +75,26 @@ wss.on('connection', (ws) => {
             const msg = JSON.parse(data);
 
             if (msg.type === "move") {
-                players[playerId].x      = msg.x;
-                players[playerId].y      = msg.y;
-                players[playerId].z      = msg.z;
-                players[playerId].rot    = msg.rot;
-                players[playerId].firing = msg.firing ?? false;
+                // 🔫 ACTUALIZADO: Guardar estado del arma
+                players[playerId].x             = msg.x;
+                players[playerId].y             = msg.y;
+                players[playerId].z             = msg.z;
+                players[playerId].rot           = msg.rot;
+                players[playerId].firing        = msg.firing ?? false;
+                players[playerId].weapon_drawn  = msg.weapon_drawn ?? false;      // 🔫 NUEVO
+                players[playerId].transitioning = msg.transitioning ?? false;     // 🔫 NUEVO
 
+                // 🔫 ACTUALIZADO: Transmitir estado del arma
                 broadcast({
-                    type:   "player_moved",
-                    id:     playerId,
-                    x:      msg.x,
-                    y:      msg.y,
-                    z:      msg.z,
-                    rot:    msg.rot,
-                    firing: msg.firing ?? false
+                    type:           "player_moved",
+                    id:             playerId,
+                    x:              msg.x,
+                    y:              msg.y,
+                    z:              msg.z,
+                    rot:            msg.rot,
+                    firing:         msg.firing ?? false,
+                    weapon_drawn:   msg.weapon_drawn ?? false,      // 🔫 NUEVO
+                    transitioning:  msg.transitioning ?? false      // 🔫 NUEVO
                 }, playerId);
             }
 
@@ -109,9 +129,7 @@ function broadcast(obj, excludeId = null) {
     Object.keys(players).forEach((id) => {
         const pid = parseInt(id);
         if (pid !== excludeId) {
-            if (players[pid].ws.readyState === WebSocket.OPEN) {
-                players[pid].ws.send(msg);
-            }
+            send(players[pid].ws, obj);
         }
     });
 }
