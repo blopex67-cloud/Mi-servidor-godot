@@ -1,135 +1,177 @@
-const WebSocket = require('ws');
+const WebSocket = require("ws");
+const server = new WebSocket.Server({ port: 8080 });
 
-const PORT = process.env.PORT || 8080;
-const wss  = new WebSocket.Server({ port: PORT });
+const players = {};
 
-let players = {};
-let nextId  = 1;
-
-console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-
-wss.on('connection', (ws) => {
-    const playerId = nextId++;
-
-    // ✅ Posición de spawn aleatoria
-    const spawnX = (Math.random() - 0.5) * 10;
-    const spawnZ = (Math.random() - 0.5) * 10;
-
-    // 🔫 ACTUALIZADO: Incluir estado del arma
-    players[playerId] = { 
-        ws, 
-        x: spawnX, 
-        y: 1, 
-        z: spawnZ, 
-        rot: 0, 
-        firing: false,
-        weapon_drawn: false,      // 🔫 NUEVO
-        transitioning: false      // 🔫 NUEVO
-    };
-
-    console.log(`✅ Jugador ${playerId} conectado. Total: ${Object.keys(players).length}`);
-
-    // ── 1. Enviar ID + posición spawn al nuevo jugador
-    send(ws, {
-        type:   "welcome",
-        id:     playerId,
-        x:      spawnX,
-        y:      1,
-        z:      spawnZ
-    });
-
-    // ── 2. Enviar lista de jugadores ya conectados al nuevo
-    Object.keys(players).forEach((id) => {
-        const pid = parseInt(id);
-        if (pid !== playerId) {
-            send(ws, {
-                type:           "player_joined",
-                id:             pid,
-                x:              players[pid].x,
-                y:              players[pid].y,
-                z:              players[pid].z,
-                rot:            players[pid].rot,
-                firing:         players[pid].firing,
-                weapon_drawn:   players[pid].weapon_drawn,      // 🔫 NUEVO
-                transitioning:  players[pid].transitioning      // 🔫 NUEVO
-            });
+function broadcast(message, excludeId = null) {
+    const data = JSON.stringify(message);
+    server.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+            const playerId = client.playerId;
+            if (playerId !== excludeId) {
+                client.send(data);
+            }
         }
     });
+}
 
-    // ── 3. Notificar a todos que llegó jugador nuevo
+server.on("connection", (ws) => {
+    const playerId = Date.now();
+    ws.playerId = playerId;
+
+    players[playerId] = {
+        x: 0,
+        y: 0,
+        z: 0,
+        rot: 0,
+        firing: false,
+        weapon_drawn: false,
+        transitioning: false,
+        transition_anim: "",
+        health: 100,
+        is_dead: false
+    };
+
+    console.log(`✅ Jugador ${playerId} conectado`);
+
+    // Enviar ID al nuevo jugador
+    ws.send(JSON.stringify({
+        type: "id_assignment",
+        id: playerId
+    }));
+
+    // Enviar lista de jugadores existentes al nuevo jugador
+    for (const [id, data] of Object.entries(players)) {
+        if (parseInt(id) !== playerId) {
+            ws.send(JSON.stringify({
+                type: "player_joined",
+                id: parseInt(id),
+                x: data.x,
+                y: data.y,
+                z: data.z,
+                rot: data.rot,
+                firing: data.firing,
+                weapon_drawn: data.weapon_drawn,
+                transitioning: data.transitioning,
+                transition_anim: data.transition_anim,
+                health: data.health,
+                is_dead: data.is_dead
+            }));
+        }
+    }
+
+    // Notificar a otros jugadores sobre el nuevo jugador
     broadcast({
-        type:           "player_joined",
-        id:             playerId,
-        x:              spawnX,
-        y:              1,
-        z:              spawnZ,
-        rot:            0,
-        firing:         false,
-        weapon_drawn:   false,      // 🔫 NUEVO
-        transitioning:  false       // 🔫 NUEVO
+        type: "player_joined",
+        id: playerId,
+        x: 0,
+        y: 0,
+        z: 0,
+        rot: 0,
+        firing: false,
+        weapon_drawn: false,
+        transitioning: false,
+        transition_anim: "",
+        health: 100,
+        is_dead: false
     }, playerId);
 
-    // ── 4. Recibir mensajes del jugador
-    ws.on('message', (data) => {
+    ws.on("message", (message) => {
         try {
-            const msg = JSON.parse(data);
+            const msg = JSON.parse(message);
 
+            // ─────────────────────────────────────────────────────
+            //  MOVIMIENTO Y ESTADO
+            // ─────────────────────────────────────────────────────
             if (msg.type === "move") {
-                // 🔫 ACTUALIZADO: Guardar estado del arma
-                players[playerId].x             = msg.x;
-                players[playerId].y             = msg.y;
-                players[playerId].z             = msg.z;
-                players[playerId].rot           = msg.rot;
-                players[playerId].firing        = msg.firing ?? false;
-                players[playerId].weapon_drawn  = msg.weapon_drawn ?? false;      // 🔫 NUEVO
-                players[playerId].transitioning = msg.transitioning ?? false;     // 🔫 NUEVO
+                players[playerId].x = msg.x;
+                players[playerId].y = msg.y;
+                players[playerId].z = msg.z;
+                players[playerId].rot = msg.rot;
+                players[playerId].firing = msg.firing ?? false;
+                players[playerId].weapon_drawn = msg.weapon_drawn ?? false;
+                players[playerId].transitioning = msg.transitioning ?? false;
+                players[playerId].transition_anim = msg.transition_anim ?? "";
+                players[playerId].health = msg.health ?? 100;
+                players[playerId].is_dead = msg.is_dead ?? false;
 
-                // 🔫 ACTUALIZADO: Transmitir estado del arma
                 broadcast({
-                    type:           "player_moved",
-                    id:             playerId,
-                    x:              msg.x,
-                    y:              msg.y,
-                    z:              msg.z,
-                    rot:            msg.rot,
-                    firing:         msg.firing ?? false,
-                    weapon_drawn:   msg.weapon_drawn ?? false,      // 🔫 NUEVO
-                    transitioning:  msg.transitioning ?? false      // 🔫 NUEVO
+                    type: "player_moved",
+                    id: playerId,
+                    x: msg.x,
+                    y: msg.y,
+                    z: msg.z,
+                    rot: msg.rot,
+                    firing: msg.firing ?? false,
+                    weapon_drawn: msg.weapon_drawn ?? false,
+                    transitioning: msg.transitioning ?? false,
+                    transition_anim: msg.transition_anim ?? "",
+                    health: msg.health ?? 100,
+                    is_dead: msg.is_dead ?? false
                 }, playerId);
             }
 
-        } catch (e) {
-            console.error(`Error mensaje jugador ${playerId}:`, e.message);
+            // ─────────────────────────────────────────────────────
+            //  💀 SISTEMA DE COMBATE
+            // ─────────────────────────────────────────────────────
+            
+            // Cuando un jugador golpea a otro
+            if (msg.type === "hit") {
+                console.log(`💥 Jugador ${playerId} golpeó a ${msg.target} (${msg.damage} daño)`);
+                
+                broadcast({
+                    type: "hit",
+                    attacker_id: playerId,
+                    target: msg.target,
+                    damage: msg.damage
+                });
+            }
+
+            // Cuando un jugador muere
+            if (msg.type === "death") {
+                console.log(`💀 Jugador ${playerId} murió`);
+                
+                players[playerId].is_dead = true;
+                players[playerId].health = 0;
+                
+                broadcast({
+                    type: "death",
+                    id: playerId,
+                    killer_id: msg.killer_id ?? -1
+                });
+            }
+
+            // Cuando un jugador respawnea
+            if (msg.type === "respawn") {
+                console.log(`✨ Jugador ${playerId} respawneó`);
+                
+                players[playerId].is_dead = false;
+                players[playerId].health = 100;
+                
+                broadcast({
+                    type: "respawn",
+                    id: playerId
+                });
+            }
+
+        } catch (error) {
+            console.error("❌ Error procesando mensaje:", error);
         }
     });
 
-    // ── 5. Jugador desconectado
-    ws.on('close', () => {
+    ws.on("close", () => {
+        console.log(`❌ Jugador ${playerId} desconectado`);
         delete players[playerId];
-        console.log(`❌ Jugador ${playerId} desconectado. Total: ${Object.keys(players).length}`);
-        broadcast({ type: "player_left", id: playerId });
+
+        broadcast({
+            type: "player_left",
+            id: playerId
+        });
     });
 
-    ws.on('error', (err) => {
-        console.error(`Error jugador ${playerId}:`, err.message);
-        delete players[playerId];
-        broadcast({ type: "player_left", id: playerId });
+    ws.on("error", (error) => {
+        console.error(`⚠️ Error en conexión del jugador ${playerId}:`, error);
     });
 });
 
-// ── Helpers ──────────────────────────────────────────────────
-function send(ws, obj) {
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(obj));
-    }
-}
-
-function broadcast(obj, excludeId = null) {
-    const msg = JSON.stringify(obj);
-    Object.keys(players).forEach((id) => {
-        const pid = parseInt(id);
-        if (pid !== excludeId) {
-            send(players[pid].ws, obj);
-        }
-    });
-}
+console.log("🚀 Servidor WebSocket corriendo en ws://localhost:8080");
