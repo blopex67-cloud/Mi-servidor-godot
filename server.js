@@ -29,7 +29,10 @@ server.on("connection", (ws) => {
         transitioning: false,
         transition_anim: "",
         health: 100,
-        is_dead: false
+        is_dead: false,
+        skin_index: 0, // 🌟 NUEVO
+        player_name: "Player", // 🌟 NUEVO
+        level: 1 // 🌟 NUEVO
     };
 
     console.log(`✅ Jugador ${playerId} conectado`);
@@ -55,7 +58,10 @@ server.on("connection", (ws) => {
                 transitioning: data.transitioning,
                 transition_anim: data.transition_anim,
                 health: data.health,
-                is_dead: data.is_dead
+                is_dead: data.is_dead,
+                skin_index: data.skin_index, // 🌟 NUEVO
+                player_name: data.player_name, // 🌟 NUEVO
+                level: data.level // 🌟 NUEVO
             }));
         }
     }
@@ -73,7 +79,10 @@ server.on("connection", (ws) => {
         transitioning: false,
         transition_anim: "",
         health: 100,
-        is_dead: false
+        is_dead: false,
+        skin_index: 0, // 🌟 NUEVO
+        player_name: "Player", // 🌟 NUEVO
+        level: 1 // 🌟 NUEVO
     }, playerId);
 
     ws.on("message", (message) => {
@@ -81,9 +90,39 @@ server.on("connection", (ws) => {
             const msg = JSON.parse(message);
 
             // ─────────────────────────────────────────────────────
+            //  🌟 NUEVO: DATOS DEL JUGADOR (SKIN, NOMBRE, NIVEL)
+            // ─────────────────────────────────────────────────────
+            if (msg.type === "player_data") {
+                players[playerId].skin_index = msg.skin_index ?? 0;
+                players[playerId].player_name = msg.player_name ?? "Player";
+                players[playerId].level = msg.level ?? 1;
+
+                console.log(`👕 Jugador ${playerId} configuró: Skin=${msg.skin_index}, Nombre=${msg.player_name}`);
+
+                // Reenviar actualización a todos los jugadores
+                broadcast({
+                    type: "player_joined",
+                    id: playerId,
+                    x: players[playerId].x,
+                    y: players[playerId].y,
+                    z: players[playerId].z,
+                    rot: players[playerId].rot,
+                    firing: players[playerId].firing,
+                    weapon_drawn: players[playerId].weapon_drawn,
+                    transitioning: players[playerId].transitioning,
+                    transition_anim: players[playerId].transition_anim,
+                    health: players[playerId].health,
+                    is_dead: players[playerId].is_dead,
+                    skin_index: players[playerId].skin_index,
+                    player_name: players[playerId].player_name,
+                    level: players[playerId].level
+                });
+            }
+
+            // ─────────────────────────────────────────────────────
             //  MOVIMIENTO Y ESTADO
             // ─────────────────────────────────────────────────────
-            if (msg.type === "move") {
+            else if (msg.type === "move") {
                 players[playerId].x = msg.x;
                 players[playerId].y = msg.y;
                 players[playerId].z = msg.z;
@@ -94,6 +133,7 @@ server.on("connection", (ws) => {
                 players[playerId].transition_anim = msg.transition_anim ?? "";
                 players[playerId].health = msg.health ?? 100;
                 players[playerId].is_dead = msg.is_dead ?? false;
+                players[playerId].skin_index = msg.skin_index ?? players[playerId].skin_index; // 🌟 NUEVO
 
                 broadcast({
                     type: "player_moved",
@@ -107,7 +147,8 @@ server.on("connection", (ws) => {
                     transitioning: msg.transitioning ?? false,
                     transition_anim: msg.transition_anim ?? "",
                     health: msg.health ?? 100,
-                    is_dead: msg.is_dead ?? false
+                    is_dead: msg.is_dead ?? false,
+                    skin_index: players[playerId].skin_index // 🌟 NUEVO
                 }, playerId);
             }
 
@@ -116,7 +157,7 @@ server.on("connection", (ws) => {
             // ─────────────────────────────────────────────────────
             
             // Cuando un jugador golpea a otro
-            if (msg.type === "hit") {
+            else if (msg.type === "hit") {
                 console.log(`💥 Jugador ${playerId} golpeó a ${msg.target} (${msg.damage} daño)`);
                 
                 broadcast({
@@ -128,7 +169,7 @@ server.on("connection", (ws) => {
             }
 
             // Cuando un jugador muere
-            if (msg.type === "death") {
+            else if (msg.type === "death") {
                 console.log(`💀 Jugador ${playerId} murió`);
                 
                 players[playerId].is_dead = true;
@@ -142,7 +183,7 @@ server.on("connection", (ws) => {
             }
 
             // Cuando un jugador respawnea
-            if (msg.type === "respawn") {
+            else if (msg.type === "respawn") {
                 console.log(`✨ Jugador ${playerId} respawneó`);
                 
                 players[playerId].is_dead = false;
