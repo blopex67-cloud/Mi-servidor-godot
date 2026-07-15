@@ -19,6 +19,7 @@ server.on("connection", (ws) => {
     const playerId = Date.now();
     ws.playerId = playerId;
 
+    // 1. AÑADIDO: Guardamos la 'skin' en el estado inicial del jugador
     players[playerId] = {
         x: 0,
         y: 0,
@@ -30,9 +31,7 @@ server.on("connection", (ws) => {
         transition_anim: "",
         health: 100,
         is_dead: false,
-        skin_index: 0, // 🌟 NUEVO
-        player_name: "Player", // 🌟 NUEVO
-        level: 1 // 🌟 NUEVO
+        skin: "default" // <-- Skin por defecto
     };
 
     console.log(`✅ Jugador ${playerId} conectado`);
@@ -59,9 +58,7 @@ server.on("connection", (ws) => {
                 transition_anim: data.transition_anim,
                 health: data.health,
                 is_dead: data.is_dead,
-                skin_index: data.skin_index, // 🌟 NUEVO
-                player_name: data.player_name, // 🌟 NUEVO
-                level: data.level // 🌟 NUEVO
+                skin: data.skin // <-- AÑADIDO: Enviar la skin de los que ya están en la sala
             }));
         }
     }
@@ -80,9 +77,7 @@ server.on("connection", (ws) => {
         transition_anim: "",
         health: 100,
         is_dead: false,
-        skin_index: 0, // 🌟 NUEVO
-        player_name: "Player", // 🌟 NUEVO
-        level: 1 // 🌟 NUEVO
+        skin: "default" // <-- AÑADIDO
     }, playerId);
 
     ws.on("message", (message) => {
@@ -90,39 +85,24 @@ server.on("connection", (ws) => {
             const msg = JSON.parse(message);
 
             // ─────────────────────────────────────────────────────
-            //  🌟 NUEVO: DATOS DEL JUGADOR (SKIN, NOMBRE, NIVEL)
+            //  SISTEMA DE SKINS (NUEVO)
             // ─────────────────────────────────────────────────────
-            if (msg.type === "player_data") {
-                players[playerId].skin_index = msg.skin_index ?? 0;
-                players[playerId].player_name = msg.player_name ?? "Player";
-                players[playerId].level = msg.level ?? 1;
+            // Recibir un aviso exclusivo de que el jugador cambió su skin
+            if (msg.type === "change_skin") {
+                console.log(`👕 Jugador ${playerId} cambió su skin a: ${msg.skin}`);
+                players[playerId].skin = msg.skin;
 
-                console.log(`👕 Jugador ${playerId} configuró: Skin=${msg.skin_index}, Nombre=${msg.player_name}`);
-
-                // Reenviar actualización a todos los jugadores
                 broadcast({
-                    type: "player_joined",
+                    type: "skin_updated",
                     id: playerId,
-                    x: players[playerId].x,
-                    y: players[playerId].y,
-                    z: players[playerId].z,
-                    rot: players[playerId].rot,
-                    firing: players[playerId].firing,
-                    weapon_drawn: players[playerId].weapon_drawn,
-                    transitioning: players[playerId].transitioning,
-                    transition_anim: players[playerId].transition_anim,
-                    health: players[playerId].health,
-                    is_dead: players[playerId].is_dead,
-                    skin_index: players[playerId].skin_index,
-                    player_name: players[playerId].player_name,
-                    level: players[playerId].level
+                    skin: msg.skin
                 });
             }
 
             // ─────────────────────────────────────────────────────
             //  MOVIMIENTO Y ESTADO
             // ─────────────────────────────────────────────────────
-            else if (msg.type === "move") {
+            if (msg.type === "move") {
                 players[playerId].x = msg.x;
                 players[playerId].y = msg.y;
                 players[playerId].z = msg.z;
@@ -133,7 +113,11 @@ server.on("connection", (ws) => {
                 players[playerId].transition_anim = msg.transition_anim ?? "";
                 players[playerId].health = msg.health ?? 100;
                 players[playerId].is_dead = msg.is_dead ?? false;
-                players[playerId].skin_index = msg.skin_index ?? players[playerId].skin_index; // 🌟 NUEVO
+                
+                // Si el cliente envía la skin junto con el movimiento, la actualizamos
+                if (msg.skin) {
+                    players[playerId].skin = msg.skin;
+                }
 
                 broadcast({
                     type: "player_moved",
@@ -148,18 +132,15 @@ server.on("connection", (ws) => {
                     transition_anim: msg.transition_anim ?? "",
                     health: msg.health ?? 100,
                     is_dead: msg.is_dead ?? false,
-                    skin_index: players[playerId].skin_index // 🌟 NUEVO
+                    skin: players[playerId].skin // <-- AÑADIDO: Mantener la skin sincronizada
                 }, playerId);
             }
 
             // ─────────────────────────────────────────────────────
             //  💀 SISTEMA DE COMBATE
             // ─────────────────────────────────────────────────────
-            
-            // Cuando un jugador golpea a otro
-            else if (msg.type === "hit") {
+            if (msg.type === "hit") {
                 console.log(`💥 Jugador ${playerId} golpeó a ${msg.target} (${msg.damage} daño)`);
-                
                 broadcast({
                     type: "hit",
                     attacker_id: playerId,
@@ -168,13 +149,10 @@ server.on("connection", (ws) => {
                 });
             }
 
-            // Cuando un jugador muere
-            else if (msg.type === "death") {
+            if (msg.type === "death") {
                 console.log(`💀 Jugador ${playerId} murió`);
-                
                 players[playerId].is_dead = true;
                 players[playerId].health = 0;
-                
                 broadcast({
                     type: "death",
                     id: playerId,
@@ -182,13 +160,10 @@ server.on("connection", (ws) => {
                 });
             }
 
-            // Cuando un jugador respawnea
-            else if (msg.type === "respawn") {
+            if (msg.type === "respawn") {
                 console.log(`✨ Jugador ${playerId} respawneó`);
-                
                 players[playerId].is_dead = false;
                 players[playerId].health = 100;
-                
                 broadcast({
                     type: "respawn",
                     id: playerId
@@ -203,11 +178,7 @@ server.on("connection", (ws) => {
     ws.on("close", () => {
         console.log(`❌ Jugador ${playerId} desconectado`);
         delete players[playerId];
-
-        broadcast({
-            type: "player_left",
-            id: playerId
-        });
+        broadcast({ type: "player_left", id: playerId });
     });
 
     ws.on("error", (error) => {
