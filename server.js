@@ -19,7 +19,6 @@ server.on("connection", (ws) => {
     const playerId = Date.now();
     ws.playerId = playerId;
 
-    // 1. AÑADIDO: Guardamos la 'skin' en el estado inicial del jugador
     players[playerId] = {
         x: 0,
         y: 0,
@@ -31,18 +30,19 @@ server.on("connection", (ws) => {
         transition_anim: "",
         health: 100,
         is_dead: false,
-        skin: "default" // <-- Skin por defecto
+        is_sliding: false,      // <-- AÑADIDO
+        is_sliding_out: false,  // <-- AÑADIDO
+        is_skydiving: false,    // <-- AÑADIDO
+        skin: "default" 
     };
 
     console.log(`✅ Jugador ${playerId} conectado`);
 
-    // Enviar ID al nuevo jugador
     ws.send(JSON.stringify({
         type: "id_assignment",
         id: playerId
     }));
 
-    // Enviar lista de jugadores existentes al nuevo jugador
     for (const [id, data] of Object.entries(players)) {
         if (parseInt(id) !== playerId) {
             ws.send(JSON.stringify({
@@ -58,12 +58,14 @@ server.on("connection", (ws) => {
                 transition_anim: data.transition_anim,
                 health: data.health,
                 is_dead: data.is_dead,
-                skin: data.skin // <-- AÑADIDO: Enviar la skin de los que ya están en la sala
+                is_sliding: data.is_sliding,         // <-- AÑADIDO
+                is_sliding_out: data.is_sliding_out, // <-- AÑADIDO
+                is_skydiving: data.is_skydiving,     // <-- AÑADIDO
+                skin: data.skin 
             }));
         }
     }
 
-    // Notificar a otros jugadores sobre el nuevo jugador
     broadcast({
         type: "player_joined",
         id: playerId,
@@ -77,17 +79,16 @@ server.on("connection", (ws) => {
         transition_anim: "",
         health: 100,
         is_dead: false,
-        skin: "default" // <-- AÑADIDO
+        is_sliding: false,      // <-- AÑADIDO
+        is_sliding_out: false,  // <-- AÑADIDO
+        is_skydiving: false,    // <-- AÑADIDO
+        skin: "default" 
     }, playerId);
 
     ws.on("message", (message) => {
         try {
             const msg = JSON.parse(message);
 
-            // ─────────────────────────────────────────────────────
-            //  SISTEMA DE SKINS (NUEVO)
-            // ─────────────────────────────────────────────────────
-            // Recibir un aviso exclusivo de que el jugador cambió su skin
             if (msg.type === "change_skin") {
                 console.log(`👕 Jugador ${playerId} cambió su skin a: ${msg.skin}`);
                 players[playerId].skin = msg.skin;
@@ -99,9 +100,6 @@ server.on("connection", (ws) => {
                 });
             }
 
-            // ─────────────────────────────────────────────────────
-            //  MOVIMIENTO Y ESTADO
-            // ─────────────────────────────────────────────────────
             if (msg.type === "move") {
                 players[playerId].x = msg.x;
                 players[playerId].y = msg.y;
@@ -114,7 +112,11 @@ server.on("connection", (ws) => {
                 players[playerId].health = msg.health ?? 100;
                 players[playerId].is_dead = msg.is_dead ?? false;
                 
-                // Si el cliente envía la skin junto con el movimiento, la actualizamos
+                // --- NUEVAS VARIABLES GUARDADAS EN EL SERVIDOR ---
+                players[playerId].is_sliding = msg.is_sliding ?? false;
+                players[playerId].is_sliding_out = msg.is_sliding_out ?? false;
+                players[playerId].is_skydiving = msg.is_skydiving ?? false;
+                
                 if (msg.skin) {
                     players[playerId].skin = msg.skin;
                 }
@@ -132,13 +134,16 @@ server.on("connection", (ws) => {
                     transition_anim: msg.transition_anim ?? "",
                     health: msg.health ?? 100,
                     is_dead: msg.is_dead ?? false,
-                    skin: players[playerId].skin // <-- AÑADIDO: Mantener la skin sincronizada
+                    
+                    // --- NUEVAS VARIABLES ENVIADAS A LOS DEMÁS ---
+                    is_sliding: msg.is_sliding ?? false,
+                    is_sliding_out: msg.is_sliding_out ?? false,
+                    is_skydiving: msg.is_skydiving ?? false,
+                    
+                    skin: players[playerId].skin 
                 }, playerId);
             }
 
-            // ─────────────────────────────────────────────────────
-            //  💀 SISTEMA DE COMBATE
-            // ─────────────────────────────────────────────────────
             if (msg.type === "hit") {
                 console.log(`💥 Jugador ${playerId} golpeó a ${msg.target} (${msg.damage} daño)`);
                 broadcast({
