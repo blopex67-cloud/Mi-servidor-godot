@@ -1,194 +1,146 @@
-const WebSocket = require("ws");
-const server = new WebSocket.Server({ port: 8080 });
-
-const players = {};
-
-function broadcast(message, excludeId = null) {
-    const data = JSON.stringify(message);
-    server.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-            const playerId = client.playerId;
-            if (playerId !== excludeId) {
-                client.send(data);
-            }
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Juego Multiplayer</title>
+    <style>
+        /* Estilos básicos para que ocupe toda la pantalla */
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #2c3e50;
+            color: white;
+            font-family: Arial, sans-serif;
         }
-    });
-}
 
-server.on("connection", (ws) => {
-    const playerId = Date.now();
-    ws.playerId = playerId;
-
-    players[playerId] = {
-        x: 0,
-        y: 0,
-        z: 0,
-        rot: 0,
-        firing: false,
-        weapon_drawn: false,
-        transitioning: false,
-        transition_anim: "",
-        health: 100,
-        is_dead: false,
-        is_sliding: false,      // <-- AÑADIDO
-        is_sliding_out: false,  // <-- AÑADIDO
-        is_skydiving: false,    // <-- AÑADIDO
-        skin: "default" 
-    };
-
-    console.log(`✅ Jugador ${playerId} conectado`);
-
-    ws.send(JSON.stringify({
-        type: "id_assignment",
-        id: playerId
-    }));
-
-    for (const [id, data] of Object.entries(players)) {
-        if (parseInt(id) !== playerId) {
-            ws.send(JSON.stringify({
-                type: "player_joined",
-                id: parseInt(id),
-                x: data.x,
-                y: data.y,
-                z: data.z,
-                rot: data.rot,
-                firing: data.firing,
-                weapon_drawn: data.weapon_drawn,
-                transitioning: data.transitioning,
-                transition_anim: data.transition_anim,
-                health: data.health,
-                is_dead: data.is_dead,
-                is_sliding: data.is_sliding,         // <-- AÑADIDO
-                is_sliding_out: data.is_sliding_out, // <-- AÑADIDO
-                is_skydiving: data.is_skydiving,     // <-- AÑADIDO
-                skin: data.skin 
-            }));
+        /* Pantalla de desconexión (Oculta por defecto) */
+        #no-wifi-message {
+            display: none; 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100vw; 
+            height: 100vh; 
+            background: rgba(0, 0, 0, 0.9); 
+            color: #e74c3c; 
+            flex-direction: column;
+            justify-content: center; 
+            align-items: center; 
+            z-index: 9999;
         }
-    }
 
-    broadcast({
-        type: "player_joined",
-        id: playerId,
-        x: 0,
-        y: 0,
-        z: 0,
-        rot: 0,
-        firing: false,
-        weapon_drawn: false,
-        transitioning: false,
-        transition_anim: "",
-        health: 100,
-        is_dead: false,
-        is_sliding: false,      // <-- AÑADIDO
-        is_sliding_out: false,  // <-- AÑADIDO
-        is_skydiving: false,    // <-- AÑADIDO
-        skin: "default" 
-    }, playerId);
+        #game-ui {
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
 
-    ws.on("message", (message) => {
-        try {
-            const msg = JSON.parse(message);
+    <!-- Pantalla de falta de conexión -->
+    <div id="no-wifi-message">
+        <h1>⚠️ Sin Conexión</h1>
+        <p>No hay internet o el servidor está apagado. Intentando reconectar...</p>
+    </div>
 
-            if (msg.type === "change_skin") {
-                console.log(`👕 Jugador ${playerId} cambió su skin a: ${msg.skin}`);
-                players[playerId].skin = msg.skin;
+    <!-- Interfaz de tu juego -->
+    <div id="game-ui">
+        <h1>El juego ha iniciado 🚀</h1>
+        <p>Tu ID de jugador: <strong id="mi-id">Conectando...</strong></p>
+        <p>Otros jugadores en la partida: <strong id="contador-jugadores">0</strong></p>
+    </div>
 
-                broadcast({
-                    type: "skin_updated",
-                    id: playerId,
-                    skin: msg.skin
-                });
+    <script>
+        const noWifiScreen = document.getElementById("no-wifi-message");
+        const miIdElemento = document.getElementById("mi-id");
+        
+        let ws;
+        let miId = null;
+        let otrosJugadores = {};
+
+        // 1. Detectar si el usuario apaga el WiFi en su PC/Móvil
+        window.addEventListener("offline", () => {
+            noWifiScreen.style.display = "flex";
+        });
+
+        window.addEventListener("online", () => {
+            noWifiScreen.style.display = "none";
+            conectarServidor(); // Reconectar rápido al volver el internet
+        });
+
+        // 2. Función principal para conectar al servidor (Inicia al instante)
+        function conectarServidor() {
+            // Evitar múltiples conexiones si ya está conectando
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                return;
             }
 
-            if (msg.type === "move") {
-                players[playerId].x = msg.x;
-                players[playerId].y = msg.y;
-                players[playerId].z = msg.z;
-                players[playerId].rot = msg.rot;
-                players[playerId].firing = msg.firing ?? false;
-                players[playerId].weapon_drawn = msg.weapon_drawn ?? false;
-                players[playerId].transitioning = msg.transitioning ?? false;
-                players[playerId].transition_anim = msg.transition_anim ?? "";
-                players[playerId].health = msg.health ?? 100;
-                players[playerId].is_dead = msg.is_dead ?? false;
-                
-                // --- NUEVAS VARIABLES GUARDADAS EN EL SERVIDOR ---
-                players[playerId].is_sliding = msg.is_sliding ?? false;
-                players[playerId].is_sliding_out = msg.is_sliding_out ?? false;
-                players[playerId].is_skydiving = msg.is_skydiving ?? false;
-                
-                if (msg.skin) {
-                    players[playerId].skin = msg.skin;
+            console.log("Intentando conectar al servidor...");
+            ws = new WebSocket("ws://localhost:8080"); // La IP de tu servidor
+
+            // Cuando la conexión es exitosa (Juego inicia)
+            ws.onopen = () => {
+                console.log("✅ Conectado al servidor");
+                noWifiScreen.style.display = "none"; // Ocultar mensaje de error
+                iniciarJuego();
+            };
+
+            // Recibir mensajes de tu servidor Node.js
+            ws.onmessage = (evento) => {
+                const msg = JSON.parse(evento.data);
+
+                if (msg.type === "id_assignment") {
+                    miId = msg.id;
+                    miIdElemento.innerText = miId;
                 }
 
-                broadcast({
-                    type: "player_moved",
-                    id: playerId,
-                    x: msg.x,
-                    y: msg.y,
-                    z: msg.z,
-                    rot: msg.rot,
-                    firing: msg.firing ?? false,
-                    weapon_drawn: msg.weapon_drawn ?? false,
-                    transitioning: msg.transitioning ?? false,
-                    transition_anim: msg.transition_anim ?? "",
-                    health: msg.health ?? 100,
-                    is_dead: msg.is_dead ?? false,
-                    
-                    // --- NUEVAS VARIABLES ENVIADAS A LOS DEMÁS ---
-                    is_sliding: msg.is_sliding ?? false,
-                    is_sliding_out: msg.is_sliding_out ?? false,
-                    is_skydiving: msg.is_skydiving ?? false,
-                    
-                    skin: players[playerId].skin 
-                }, playerId);
-            }
+                if (msg.type === "player_joined") {
+                    otrosJugadores[msg.id] = msg;
+                    actualizarUI();
+                }
 
-            if (msg.type === "hit") {
-                console.log(`💥 Jugador ${playerId} golpeó a ${msg.target} (${msg.damage} daño)`);
-                broadcast({
-                    type: "hit",
-                    attacker_id: playerId,
-                    target: msg.target,
-                    damage: msg.damage
-                });
-            }
+                if (msg.type === "player_left") {
+                    delete otrosJugadores[msg.id];
+                    actualizarUI();
+                }
+            };
 
-            if (msg.type === "death") {
-                console.log(`💀 Jugador ${playerId} murió`);
-                players[playerId].is_dead = true;
-                players[playerId].health = 0;
-                broadcast({
-                    type: "death",
-                    id: playerId,
-                    killer_id: msg.killer_id ?? -1
-                });
-            }
+            // Si el servidor se apaga o se pierde la conexión
+            ws.onclose = () => {
+                console.log("❌ Desconectado del servidor");
+                noWifiScreen.style.display = "flex"; // Mostrar pantalla de error
+                
+                // Intentar reconectar cada 2 segundos automáticamente
+                setTimeout(conectarServidor, 2000); 
+            };
 
-            if (msg.type === "respawn") {
-                console.log(`✨ Jugador ${playerId} respawneó`);
-                players[playerId].is_dead = false;
-                players[playerId].health = 100;
-                broadcast({
-                    type: "respawn",
-                    id: playerId
-                });
-            }
-
-        } catch (error) {
-            console.error("❌ Error procesando mensaje:", error);
+            ws.onerror = (error) => {
+                console.error("⚠️ Error en WebSocket");
+                ws.close(); // Forzar el cierre para que onclose intente reconectar
+            };
         }
-    });
 
-    ws.on("close", () => {
-        console.log(`❌ Jugador ${playerId} desconectado`);
-        delete players[playerId];
-        broadcast({ type: "player_left", id: playerId });
-    });
+        // Función donde pones la lógica de tu juego (Three.js, Canvas, etc.)
+        function iniciarJuego() {
+            // Aquí va el código de tu juego real.
+            // Por ejemplo, enviar tu posición inicial:
+            if(ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "move",
+                    x: 0, y: 0, z: 0,
+                    rot: 0, health: 100
+                }));
+            }
+        }
 
-    ws.on("error", (error) => {
-        console.error(`⚠️ Error en conexión del jugador ${playerId}:`, error);
-    });
-});
+        // Actualizar datos visuales simples
+        function actualizarUI() {
+            document.getElementById("contador-jugadores").innerText = Object.keys(otrosJugadores).length;
+        }
 
-console.log("🚀 Servidor WebSocket corriendo en ws://localhost:8080");
+        // 3. INICIAR INSTANTÁNEAMENTE AL CARGAR LA PÁGINA
+        conectarServidor();
+
+    </script>
+</body>
+</html>
