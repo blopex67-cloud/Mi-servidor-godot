@@ -6,15 +6,30 @@ const rooms = {
     battle_royale: { players: {} }
 };
 let duelRoomCounter = 1;
+let duel1v1RoomCounter = 1;
 
+// Función para encontrar sala de 4v4 (máx 8 jugadores)
 function getAvailableDuelRoom() {
     for (const roomId in rooms) {
         if (roomId.startsWith("squad_duel_")) {
             const playerCount = Object.keys(rooms[roomId].players).length;
-            if (playerCount < 8) return roomId; // Max 4v4 (8 jugadores por sala)
+            if (playerCount < 8) return roomId;
         }
     }
     const newRoomId = "squad_duel_" + duelRoomCounter++;
+    rooms[newRoomId] = { players: {} };
+    return newRoomId;
+}
+
+// Función para encontrar sala de 1v1 (máx 2 jugadores)
+function getAvailable1v1Room() {
+    for (const roomId in rooms) {
+        if (roomId.startsWith("duel_1v1_")) {
+            const playerCount = Object.keys(rooms[roomId].players).length;
+            if (playerCount < 2) return roomId; 
+        }
+    }
+    const newRoomId = "duel_1v1_" + duel1v1RoomCounter++;
     rooms[newRoomId] = { players: {} };
     return newRoomId;
 }
@@ -34,7 +49,7 @@ server.on("connection", (ws, req) => {
     const playerId = Date.now();
     ws.playerId = playerId;
 
-    // Leer url ej: wss://midominio.com/?mode=squad_duel
+    // Leer url ej: wss://midominio.com/?mode=duel_1v1
     const queryParts = req.url.split('?');
     let gameMode = "battle_royale";
     if (queryParts.length > 1) {
@@ -45,9 +60,9 @@ server.on("connection", (ws, req) => {
     let roomId;
     let team = 0;
 
-    // Asignar Sala y Equipo
-    if (gameMode === "squad_duel") {
-        roomId = getAvailableDuelRoom();
+    // Asignar Sala y Equipo según el modo
+    if (gameMode === "squad_duel" || gameMode === "duel_1v1") {
+        roomId = (gameMode === "squad_duel") ? getAvailableDuelRoom() : getAvailable1v1Room();
         
         let team1Count = 0;
         let team2Count = 0;
@@ -178,6 +193,7 @@ server.on("connection", (ws, req) => {
             delete rooms[roomId].players[playerId];
             broadcast({ type: "player_left", id: playerId }, roomId);
             
+            // Eliminar la sala si queda vacía y no es la principal de battle royale
             if (roomId !== "battle_royale" && Object.keys(rooms[roomId].players).length === 0) {
                 delete rooms[roomId];
                 console.log(`🧹 Sala [${roomId}] eliminada por estar vacía`);
