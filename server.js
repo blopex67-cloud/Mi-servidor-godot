@@ -1,167 +1,84 @@
 const WebSocket = require('ws');
 const http = require('http');
 
+// Render asigna un puerto en la variable de entorno PORT, si no, usa el 10000
 const PORT = process.env.PORT || 10000;
 
-// Servidor HTTP básico para health check en Render
+// 1. Crear un servidor HTTP b谩sico
+// Esto es 煤til para que Render verifique que el servidor est谩 "vivo" (Health Check)
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Servidor PvP Godot activo\n');
+    res.end('Servidor de Godot Multiplayer Activo\n');
 });
 
-// WebSocket sobre el servidor HTTP
+// 2. Iniciar el servidor WebSocket montado sobre el servidor HTTP
 const wss = new WebSocket.Server({ server });
 
-// Estructura de salas:
-// [
-//   {
-//     id: "room_1",
-//     players: [
-//       { id: 1, ws: ..., spawnIndex: 0 },
-//       { id: 2, ws: ..., spawnIndex: 1 }
-//     ]
-//   }
-// ]
-let rooms = [];
-let nextClientId = 1;
-let nextRoomNumber = 1;
+// Mapa para guardar los jugadores conectados y sus conexiones
+const clients = new Map();
+let nextClientId = 1; // ID auto-incremental para cada jugador
 
-// Buscar una sala con espacio o crear una nueva
-function findOrCreateRoom() {
-    let room = rooms.find(r => r.players.length < 2);
-
-    if (!room) {
-        room = {
-            id: `room_${nextRoomNumber++}`,
-            players: []
-        };
-        rooms.push(room);
-        console.log(`[ROOM] Creada nueva sala: ${room.id}`);
-    }
-
-    return room;
-}
-
-// Enviar a todos en una sala, excepto opcionalmente uno
-function broadcastToRoom(room, messageObj, excludeClientId = null) {
+// Funci贸n auxiliar para enviar un mensaje a todos MENOS al que lo envi贸
+function broadcast(messageObj, excludeClientId = null) {
     const messageString = JSON.stringify(messageObj);
-
-    for (const player of room.players) {
-        if (player.id !== excludeClientId && player.ws.readyState === WebSocket.OPEN) {
-            player.ws.send(messageString);
+    for (const [id, ws] of clients.entries()) {
+        if (id !== excludeClientId && ws.readyState === WebSocket.OPEN) {
+            ws.send(messageString);
         }
     }
 }
 
-// Buscar jugador dentro de una sala
-function getPlayerInRoom(room, clientId) {
-    return room.players.find(p => p.id === clientId);
-}
-
-// Cuando conecta un cliente
+// 3. L贸gica cuando un cliente (m贸vil) se conecta
 wss.on('connection', (ws) => {
     const clientId = nextClientId++;
-    const room = findOrCreateRoom();
+    clients.set(clientId, ws);
+    
+    console.log(`[+] Jugador conectado. ID asignado: ${clientId}`);
 
-    // Seguridad extra, aunque findOrCreateRoom ya lo evita
-    if (room.players.length >= 2) {
-        ws.send(JSON.stringify({
-            type: 'room_full'
-        }));
-        ws.close();
-        return;
-    }
-
-    const spawnIndex = room.players.length; // 0 para el primero, 1 para el segundo
-
-    const playerData = {
-        id: clientId,
-        ws,
-        spawnIndex
-    };
-
-    room.players.push(playerData);
-
-    // Guardamos referencias en la conexión
-    ws.clientId = clientId;
-    ws.roomId = room.id;
-
-    console.log(`[+] Jugador conectado. ID: ${clientId} | Sala: ${room.id} | Spawn: ${spawnIndex}`);
-
-    // 1) Bienvenida al jugador nuevo
+    // Enviar mensaje de bienvenida al propio jugador con su ID
     ws.send(JSON.stringify({
         type: 'welcome',
-        id: clientId,
-        room: room.id,
-        spawn_index: spawnIndex
+        id: clientId
     }));
 
-    // 2) Enviarle al nuevo los jugadores que ya estaban en la sala
-    for (const p of room.players) {
-        if (p.id !== clientId) {
-            ws.send(JSON.stringify({
-                type: 'player_joined',
-                id: p.id,
-                spawn_index: p.spawnIndex
-            }));
-        }
-    }
-
-    // 3) Avisar al otro jugador de la sala que entró este nuevo
-    broadcastToRoom(room, {
+    // Avisar a los dem谩s jugadores que alguien nuevo entr贸
+    broadcast({
         type: 'player_joined',
-        id: clientId,
-        spawn_index: spawnIndex
+        id: clientId
     }, clientId);
 
-    // Escuchar mensajes del cliente
+    // 4. Escuchar los mensajes que env铆a este cliente
     ws.on('message', (message) => {
         try {
+            // Transformar el mensaje que llega de Godot a un objeto de JavaScript
             const data = JSON.parse(message);
-
-            // Buscar la sala real del cliente
-            const currentRoom = rooms.find(r => r.id === ws.roomId);
-            if (!currentRoom) return;
-
-            const sender = getPlayerInRoom(currentRoom, clientId);
-            if (!sender) return;
-
-            // Forzar el ID del remitente real
+            
+            // Le forzamos el ID del remitente real para evitar trampas (spoofing)
             data.id = clientId;
 
-            // Reenviar SOLO a la misma sala
-            broadcastToRoom(currentRoom, data, clientId);
+            // Retransmitir la acci贸n (movimiento, disparo, etc.) a los dem谩s jugadores
+            broadcast(data, clientId);
 
         } catch (error) {
-            console.error(`Error al procesar mensaje del cliente ${clientId}:`, error);
+            console.error(`Error al procesar el mensaje del cliente ${clientId}:`, error);
         }
     });
 
-    // Desconexión
+    // 5. L贸gica cuando el jugador se desconecta (cierra la app o pierde internet)
     ws.on('close', () => {
-        const currentRoom = rooms.find(r => r.id === ws.roomId);
-        if (!currentRoom) return;
+        console.log(`[-] Jugador desconectado. ID: ${clientId}`);
+        clients.delete(clientId);
 
-        console.log(`[-] Jugador desconectado. ID: ${clientId} | Sala: ${currentRoom.id}`);
-
-        // Eliminar al jugador de la sala
-        currentRoom.players = currentRoom.players.filter(p => p.id !== clientId);
-
-        // Avisar al otro jugador de la sala
-        broadcastToRoom(currentRoom, {
+        // Avisar a los dem谩s que este jugador se fue para que borren su personaje 3D
+        broadcast({
             type: 'player_left',
             id: clientId
         });
-
-        // Si la sala quedó vacía, eliminarla
-        if (currentRoom.players.length === 0) {
-            rooms = rooms.filter(r => r.id !== currentRoom.id);
-            console.log(`[ROOM] Sala eliminada por quedar vacía: ${currentRoom.id}`);
-        }
     });
 });
 
-// Iniciar servidor
+// 6. Iniciar el servidor
 server.listen(PORT, () => {
     console.log(`Servidor WebSocket escuchando en el puerto ${PORT}`);
 });
+
