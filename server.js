@@ -30,10 +30,24 @@ function broadcast(messageObj, excludeClientId = null) {
 
 // 3. Lógica cuando un cliente (móvil) se conecta
 wss.on('connection', (ws) => {
+    
+    // ==========================================
+    // LÍMITE DE 2 JUGADORES (SALA PvP)
+    // ==========================================
+    if (clients.size >= 2) {
+        console.log(`[x] Conexión rechazada. La sala ya tiene 2 jugadores.`);
+        // Le avisamos al cliente que la sala está llena (por si lo quieres leer en Godot)
+        ws.send(JSON.stringify({ type: 'room_full' }));
+        // Cerramos su conexión inmediatamente
+        ws.close();
+        return; // Salimos para no darle un ID ni registrarlo
+    }
+    // ==========================================
+
     const clientId = nextClientId++;
     clients.set(clientId, ws);
     
-    console.log(`[+] Jugador conectado. ID asignado: ${clientId}`);
+    console.log(`[+] Jugador conectado. ID asignado: ${clientId}. Jugadores en sala: ${clients.size}/2`);
 
     // Enviar mensaje de bienvenida al propio jugador con su ID
     ws.send(JSON.stringify({
@@ -66,18 +80,21 @@ wss.on('connection', (ws) => {
 
     // 5. Lógica cuando el jugador se desconecta (cierra la app o pierde internet)
     ws.on('close', () => {
-        console.log(`[-] Jugador desconectado. ID: ${clientId}`);
-        clients.delete(clientId);
+        // Nos aseguramos de que el cliente que se va estaba registrado (no era el 3ro rechazado)
+        if (clients.has(clientId)) {
+            clients.delete(clientId);
+            console.log(`[-] Jugador desconectado. ID: ${clientId}. Jugadores en sala: ${clients.size}/2`);
 
-        // Avisar a los demás que este jugador se fue para que borren su personaje 3D
-        broadcast({
-            type: 'player_left',
-            id: clientId
-        });
+            // Avisar a los demás que este jugador se fue para que borren su personaje 3D
+            broadcast({
+                type: 'player_left',
+                id: clientId
+            });
+        }
     });
 });
 
 // 6. Iniciar el servidor
 server.listen(PORT, () => {
-    console.log(`Servidor WebSocket escuchando en el puerto ${PORT}`);
+    console.log(`Servidor WebSocket PvP (Max 2) escuchando en el puerto ${PORT}`);
 });
