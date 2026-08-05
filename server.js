@@ -165,4 +165,3 @@ wss.on('connection', (ws) => {
 server.listen(PORT, () => {
     console.log(`Servidor WebSocket escuchando en el puerto ${PORT}`);
 });
-        
