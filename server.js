@@ -53,6 +53,7 @@ wss.on('connection', (ws) => {
         return;
     }
 
+    // Lógica para asignar Spawns correctamente
     const usedSpawns = room.players.map(p => p.spawnIndex);
     const spawnIndex = usedSpawns.includes(0) ? 1 : 0;
 
@@ -69,6 +70,7 @@ wss.on('connection', (ws) => {
 
     console.log(`[+] Jugador conectado. ID: ${clientId} | Sala: ${room.id} | Spawn: ${spawnIndex}`);
 
+    // Bienvenida al jugador
     ws.send(JSON.stringify({
         type: 'welcome',
         id: clientId,
@@ -76,6 +78,7 @@ wss.on('connection', (ws) => {
         spawn_index: spawnIndex
     }));
 
+    // Avisar a los que ya estaban en la sala
     for (const p of room.players) {
         if (p.id !== clientId) {
             ws.send(JSON.stringify({
@@ -86,12 +89,14 @@ wss.on('connection', (ws) => {
         }
     }
 
+    // Avisar al nuevo jugador sobre los que ya estaban
     broadcastToRoom(room, {
         type: 'player_joined',
         id: clientId,
         spawn_index: spawnIndex
     }, clientId);
 
+    // Recibir y reenviar mensajes (Movimiento, Disparo, Daño)
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
@@ -101,6 +106,7 @@ wss.on('connection', (ws) => {
             const sender = getPlayerInRoom(currentRoom, clientId);
             if (!sender) return;
 
+            // Reenviar a todos los demás en la sala
             data.id = clientId;
             broadcastToRoom(currentRoom, data, clientId);
 
@@ -122,6 +128,7 @@ wss.on('connection', (ws) => {
             id: clientId
         });
 
+        // Eliminar la sala si queda vacía
         if (currentRoom.players.length === 0) {
             rooms = rooms.filter(r => r.id !== currentRoom.id);
             console.log(`[ROOM] Sala eliminada por quedar vacía: ${currentRoom.id}`);
