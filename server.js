@@ -9,38 +9,31 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocket.Server({ server });
-
 let rooms = [];
 let nextClientId = 1;
 let nextRoomNumber = 1;
 
 function findOrCreateRoom() {
     let room = rooms.find(r => r.players.length < 2);
-
     if (!room) {
         room = {
             id: `room_${nextRoomNumber++}`,
-            players: []
+            players: [],
+            round: 1,
+            scores: {}
         };
         rooms.push(room);
-        console.log(`[ROOM] Creada nueva sala: ${room.id}`);
     }
-
     return room;
 }
 
 function broadcastToRoom(room, messageObj, excludeClientId = null) {
     const messageString = JSON.stringify(messageObj);
-
     for (const player of room.players) {
         if (player.id !== excludeClientId && player.ws.readyState === WebSocket.OPEN) {
             player.ws.send(messageString);
         }
     }
-}
-
-function getPlayerInRoom(room, clientId) {
-    return room.players.find(p => p.id === clientId);
 }
 
 wss.on('connection', (ws) => {
@@ -53,89 +46,83 @@ wss.on('connection', (ws) => {
         return;
     }
 
-    // Lógica para asignar Spawns correctamente
     const usedSpawns = room.players.map(p => p.spawnIndex);
     const spawnIndex = usedSpawns.includes(0) ? 1 : 0;
 
-    const playerData = {
-        id: clientId,
-        ws,
-        spawnIndex
-    };
-
-    room.players.push(playerData);
+    room.players.push({ id: clientId, ws, spawnIndex });
+    room.scores[clientId] = 0; // Iniciar puntaje en 0
 
     ws.clientId = clientId;
     ws.roomId = room.id;
 
-    console.log(`[+] Jugador conectado. ID: ${clientId} | Sala: ${room.id} | Spawn: ${spawnIndex}`);
-
-    // Bienvenida al jugador
     ws.send(JSON.stringify({
-        type: 'welcome',
-        id: clientId,
-        room: room.id,
-        spawn_index: spawnIndex
+        type: 'welcome', id: clientId, room: room.id, spawn_index: spawnIndex, round: room.round
     }));
 
-    // Avisar a los que ya estaban en la sala
     for (const p of room.players) {
         if (p.id !== clientId) {
-            ws.send(JSON.stringify({
-                type: 'player_joined',
-                id: p.id,
-                spawn_index: p.spawnIndex
-            }));
+            ws.send(JSON.stringify({ type: 'player_joined', id: p.id, spawn_index: p.spawnIndex }));
         }
     }
+    broadcastToRoom(room, { type: 'player_joined', id: clientId, spawn_index: spawnIndex }, clientId);
 
-    // Avisar al nuevo jugador sobre los que ya estaban
-    broadcastToRoom(room, {
-        type: 'player_joined',
-        id: clientId,
-        spawn_index: spawnIndex
-    }, clientId);
-
-    // Recibir y reenviar mensajes (Movimiento, Disparo, Daño)
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
             const currentRoom = rooms.find(r => r.id === ws.roomId);
             if (!currentRoom) return;
 
-            const sender = getPlayerInRoom(currentRoom, clientId);
-            if (!sender) return;
+            // Si un jugador muere, procesamos la ronda
+            if (data.type === "player_died") {
+                const killerId = data.killer;
+                if (currentRoom.scores[killerId] !== undefined) {
+                    currentRoom.scores[killerId] += 1;
+                }
+                
+                // Determinar quién va ganando
+                let kingId = null;
+                let maxScore = -1;
+                for (let pid in currentRoom.scores) {
+                    if (currentRoom.scores[pid] > maxScore) {
+                        maxScore = currentRoom.scores[pid];
+                        kingId = pid;
+                    } else if (currentRoom.scores[pid] === maxScore) {
+                        kingId = null; // Empate, no hay rey
+                    }
+                }
 
-            // Reenviar a todos los demás en la sala
+                currentRoom.round += 1; // Siguiente ronda
+                
+                // Avisar a todos que la ronda terminó
+                broadcastToRoom(currentRoom, {
+                    type: 'round_ended',
+                    round: currentRoom.round,
+                    king_id: kingId,
+                    scores: currentRoom.scores
+                });
+                return;
+            }
+
             data.id = clientId;
             broadcastToRoom(currentRoom, data, clientId);
 
         } catch (error) {
-            console.error(`Error al procesar mensaje del cliente ${clientId}:`, error);
+            console.error(error);
         }
     });
 
     ws.on('close', () => {
         const currentRoom = rooms.find(r => r.id === ws.roomId);
         if (!currentRoom) return;
-
-        console.log(`[-] Jugador desconectado. ID: ${clientId} | Sala: ${currentRoom.id}`);
-
         currentRoom.players = currentRoom.players.filter(p => p.id !== clientId);
-
-        broadcastToRoom(currentRoom, {
-            type: 'player_left',
-            id: clientId
-        });
-
-        // Eliminar la sala si queda vacía
+        delete currentRoom.scores[clientId];
+        broadcastToRoom(currentRoom, { type: 'player_left', id: clientId });
         if (currentRoom.players.length === 0) {
             rooms = rooms.filter(r => r.id !== currentRoom.id);
-            console.log(`[ROOM] Sala eliminada por quedar vacía: ${currentRoom.id}`);
         }
     });
 });
 
 server.listen(PORT, () => {
-    console.log(`Servidor WebSocket escuchando en el puerto ${PORT}`);
+    console.log(`Servidor escuchando en puerto ${PORT}`);
 });
