@@ -6,19 +6,21 @@ const cors = require('cors');
 const WebSocket = require('ws');
 const http = require('http');
 
-// --- 1. CONFIGURACIÓN DEL SERVIDOR Y EXPRESS ---
+// --- 1. CONFIGURACIÓN DEL SERVIDOR ---
 const PORT = process.env.PORT || 10000;
 const JWT_SECRET = process.env.JWT_SECRET || "mi_clave_super_secreta_para_el_juego";
+// El servidor leerá tu URL con contraseña desde Render gracias a esta línea:
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mi_juego_db';
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-const server = http.createServer(app); // Express maneja las peticiones HTTP normales
+const server = http.createServer(app);
 
 // --- 2. CONEXIÓN A MONGODB ---
-mongoose.connect('mongodb://localhost:27017/mi_juego_db')
-    .then(() => console.log("MongoDB conectado"))
+mongoose.connect(MONGODB_URI)
+    .then(() => console.log("MongoDB conectado exitosamente"))
     .catch(err => console.error("Error conectando a MongoDB:", err));
 
 const userSchema = new mongoose.Schema({
@@ -29,7 +31,7 @@ const User = mongoose.model('User', userSchema);
 
 // --- 3. RUTAS HTTP (SISTEMA DE CUENTAS) ---
 app.get('/', (req, res) => {
-    res.send('Servidor PvP y Cuentas Godot activo\n');
+    res.send('Servidor PvP y Cuentas Godot activo y funcionando\n');
 });
 
 app.post('/register', async (req, res) => {
@@ -79,7 +81,6 @@ app.post('/verify_token', async (req, res) => {
 });
 
 // --- 4. SERVIDOR WEBSOCKET (SISTEMA PVP) ---
-// Conectamos WebSockets al mismo servidor HTTP
 const wss = new WebSocket.Server({ server });
 let rooms = [];
 let nextClientId = 1;
@@ -196,4 +197,3 @@ wss.on('connection', (ws) => {
 server.listen(PORT, () => {
     console.log(`Servidor maestro (HTTP + WebSocket) escuchando en puerto ${PORT}`);
 });
-            
