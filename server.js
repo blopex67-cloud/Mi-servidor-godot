@@ -1,11 +1,28 @@
 const WebSocket = require('ws');
 const http = require('http');
+const mongoose = require('mongoose'); // Librería de base de datos
 
 const PORT = process.env.PORT || 10000;
 
+// <--- CONEXIÓN A MONGODB ATLAS --->
+// Ya tiene tu usuario y contraseña correctos
+const mongoURI = "mongodb+srv://blopex67_db_user:PBrsW7s4rxSjAMHb@cluster0.hhjrdwk.mongodb.net/?appName=Cluster0"; 
+
+mongoose.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
+    .then(() => console.log('Conectado a la base de datos MongoDB'))
+    .catch(err => console.error('Error al conectar a MongoDB:', err));
+
+// <--- MODELO DE JUGADOR EN LA BASE DE DATOS --->
+const jugadorSchema = new mongoose.Schema({
+    nombre: { type: String, required: true, unique: true },
+    es_creador: { type: Boolean, default: false } // Por defecto nadie es creador
+});
+const Jugador = mongoose.model('Jugador', jugadorSchema);
+
+// <--- CONFIGURACIÓN DEL SERVIDOR WEB --->
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Servidor PvP Godot activo\n');
+    res.end('Servidor PvP Godot activo con Base de Datos\n');
 });
 
 const wss = new WebSocket.Server({ server });
@@ -16,12 +33,7 @@ let nextRoomNumber = 1;
 function findOrCreateRoom() {
     let room = rooms.find(r => r.players.length < 2);
     if (!room) {
-        room = {
-            id: `room_${nextRoomNumber++}`,
-            players: [],
-            round: 1,
-            scores: {}
-        };
+        room = { id: `room_${nextRoomNumber++}`, players: [], round: 1, scores: {} };
         rooms.push(room);
     }
     return room;
@@ -50,7 +62,7 @@ wss.on('connection', (ws) => {
     const spawnIndex = usedSpawns.includes(0) ? 1 : 0;
 
     room.players.push({ id: clientId, ws, spawnIndex });
-    room.scores[clientId] = 0; // Iniciar puntaje en 0
+    room.scores[clientId] = 0; 
 
     ws.clientId = clientId;
     ws.roomId = room.id;
@@ -66,20 +78,43 @@ wss.on('connection', (ws) => {
     }
     broadcastToRoom(room, { type: 'player_joined', id: clientId, spawn_index: spawnIndex }, clientId);
 
-    ws.on('message', (message) => {
+    ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
+
+            // <--- NUEVO: SISTEMA DE LOGIN / PERFIL --->
+            if (data.type === "login") {
+                let nombreBuscado = data.nombre || `JUGADOR_${clientId}`;
+                
+                // Busca al jugador en la base de datos
+                let jugadorDB = await Jugador.findOne({ nombre: nombreBuscado });
+                
+                // Si no existe, lo crea
+                if (!jugadorDB) {
+                    jugadorDB = new Jugador({ nombre: nombreBuscado, es_creador: false });
+                    await jugadorDB.save();
+                    console.log(`Nuevo jugador registrado: ${nombreBuscado}`);
+                }
+
+                // Le envía los datos de vuelta a Godot
+                ws.send(JSON.stringify({
+                    type: 'datos_perfil',
+                    nombre: jugadorDB.nombre,
+                    es_creador: jugadorDB.es_creador
+                }));
+                return; // Evita que este mensaje vaya a la sala de combate
+            }
+
+            // <--- LÓGICA DE COMBATE ORIGINAL --->
             const currentRoom = rooms.find(r => r.id === ws.roomId);
             if (!currentRoom) return;
 
-            // Si un jugador muere, procesamos la ronda
             if (data.type === "player_died") {
                 const killerId = data.killer;
                 if (currentRoom.scores[killerId] !== undefined) {
                     currentRoom.scores[killerId] += 1;
                 }
                 
-                // Determinar quién va ganando
                 let kingId = null;
                 let maxScore = -1;
                 for (let pid in currentRoom.scores) {
@@ -87,13 +122,11 @@ wss.on('connection', (ws) => {
                         maxScore = currentRoom.scores[pid];
                         kingId = pid;
                     } else if (currentRoom.scores[pid] === maxScore) {
-                        kingId = null; // Empate, no hay rey
+                        kingId = null; 
                     }
                 }
 
-                currentRoom.round += 1; // Siguiente ronda
-                
-                // Avisar a todos que la ronda terminó
+                currentRoom.round += 1; 
                 broadcastToRoom(currentRoom, {
                     type: 'round_ended',
                     round: currentRoom.round,
@@ -126,3 +159,4 @@ wss.on('connection', (ws) => {
 server.listen(PORT, () => {
     console.log(`Servidor escuchando en puerto ${PORT}`);
 });
+                        
