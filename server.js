@@ -35,14 +35,17 @@ const server = http.createServer((req, res) => {
         req.on('end', async () => {
             try {
                 const { nombre, es_creador } = JSON.parse(body);
-                const jugador = await Jugador.findOneAndUpdate({ nombre: nombre }, { es_creador: es_creador }, { new: true });
+                
+                // MEJORA: Agregamos upsert: true para que si el jugador no existe, lo cree y lo verifique.
+                const jugador = await Jugador.findOneAndUpdate(
+                    { nombre: nombre }, 
+                    { es_creador: es_creador }, 
+                    { upsert: true, new: true } 
+                );
                 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                if (jugador) {
-                    res.end(JSON.stringify({ mensaje: `¡El jugador ${nombre} ${es_creador ? 'ahora ES CREADOR' : 'ya NO ES creador'}.` }));
-                } else {
-                    res.end(JSON.stringify({ mensaje: `Error: El jugador ${nombre} no existe.` }));
-                }
+                res.end(JSON.stringify({ mensaje: `¡El ID ${nombre} ${es_creador ? 'ahora ES CREADOR' : 'ya NO ES creador'}.` }));
+                
             } catch (error) {
                 res.writeHead(500);
                 res.end(JSON.stringify({ mensaje: 'Error en el servidor.' }));
@@ -183,4 +186,3 @@ wss.on('connection', (ws) => {
 server.listen(PORT, () => {
     console.log(`Servidor escuchando en puerto ${PORT}`);
 });
-            
