@@ -7,9 +7,11 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "ws": "^8.16.0"
+    "ws": "^8.16.0",
+    "mongoose": "^8.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
   }
 }
+
