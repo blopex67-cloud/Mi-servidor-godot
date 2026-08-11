@@ -17,16 +17,74 @@ const jugadorSchema = new mongoose.Schema({
 });
 const Jugador = mongoose.model('Jugador', jugadorSchema);
 
-// <--- SERVIDOR WEB PREPARADO PARA RECIBIR ÓRDENES DEL HTML --->
+// <--- EL HTML DE TU PANEL WEB --->
+const panelHTML = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Administración</title>
+    <style>
+        body { font-family: sans-serif; background-color: #121212; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .panel { background-color: #1e1e1e; padding: 30px; border-radius: 10px; text-align: center; width: 300px; }
+        h2 { color: #00bfff; margin-top: 0; }
+        input { width: 90%; padding: 10px; margin: 15px 0; border: none; border-radius: 5px; background: #2a2a2a; color: white; text-align: center; }
+        button { width: 100%; padding: 10px; margin: 5px 0; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .btn-verificar { background: #00bfff; color: #000; }
+        .btn-quitar { background: #ff4c4c; color: white; }
+        #mensaje { margin-top: 15px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <h2>Panel de Creadores ✔️</h2>
+        <p>Ingresa el ID del jugador:</p>
+        <input type="text" id="jugadorId" placeholder="Ej: 58102">
+        <button class="btn-verificar" onclick="actualizar(true)">Dar Verificado</button>
+        <button class="btn-quitar" onclick="actualizar(false)">Quitar Verificado</button>
+        <p id="mensaje"></p>
+    </div>
+    <script>
+        async function actualizar(estado) {
+            const id = document.getElementById("jugadorId").value;
+            const msj = document.getElementById("mensaje");
+            if (!id) return msj.innerText = "Ingresa un ID", msj.style.color = "#ff4c4c";
+            msj.innerText = "Procesando..."; msj.style.color = "white";
+            
+            try {
+                const res = await fetch("/api/verificar", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ nombre: id, es_creador: estado })
+                });
+                const data = await res.json();
+                msj.innerText = data.mensaje;
+                msj.style.color = res.ok ? "#00bfff" : "#ff4c4c";
+            } catch (e) {
+                msj.innerText = "Error al conectar."; msj.style.color = "#ff4c4c";
+            }
+        }
+    </script>
+</body>
+</html>
+`;
+
+// <--- SERVIDOR WEB --->
 const server = http.createServer((req, res) => {
-    // Dar permisos para que tu HTML local pueda comunicarse con el servidor (CORS)
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(200);
         return res.end();
+    }
+
+    // Si entras a la página principal, te muestra el panel de control
+    if (req.method === 'GET' && req.url === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(panelHTML);
     }
 
     if (req.method === 'POST' && req.url === '/api/verificar') {
@@ -35,8 +93,6 @@ const server = http.createServer((req, res) => {
         req.on('end', async () => {
             try {
                 const { nombre, es_creador } = JSON.parse(body);
-                
-                // MEJORA: Agregamos upsert: true para que si el jugador no existe, lo cree y lo verifique.
                 const jugador = await Jugador.findOneAndUpdate(
                     { nombre: nombre }, 
                     { es_creador: es_creador }, 
@@ -44,18 +100,17 @@ const server = http.createServer((req, res) => {
                 );
                 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ mensaje: `¡El ID ${nombre} ${es_creador ? 'ahora ES CREADOR' : 'ya NO ES creador'}.` }));
-                
+                res.end(JSON.stringify({ mensaje: `¡ID ${nombre} actualizado!` }));
             } catch (error) {
                 res.writeHead(500);
-                res.end(JSON.stringify({ mensaje: 'Error en el servidor.' }));
+                res.end(JSON.stringify({ mensaje: 'Error en base de datos.' }));
             }
         });
         return;
     }
 
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Servidor PvP Godot activo con Base de Datos\n');
+    res.writeHead(404);
+    res.end('Ruta no encontrada');
 });
 
 // <--- TU SISTEMA MULTIJUGADOR INTACTO --->
