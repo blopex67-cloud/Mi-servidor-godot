@@ -1,30 +1,61 @@
 const WebSocket = require('ws');
 const http = require('http');
-const mongoose = require('mongoose'); // Librería de base de datos
+const mongoose = require('mongoose');
 
 const PORT = process.env.PORT || 10000;
 
 // <--- CONEXIÓN A MONGODB ATLAS --->
-// Ya tiene tu usuario y contraseña correctos
 const mongoURI = "mongodb+srv://blopex67_db_user:PBrsW7s4rxSjAMHb@cluster0.hhjrdwk.mongodb.net/?appName=Cluster0"; 
 
 mongoose.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
     .then(() => console.log('Conectado a la base de datos MongoDB'))
     .catch(err => console.error('Error al conectar a MongoDB:', err));
 
-// <--- MODELO DE JUGADOR EN LA BASE DE DATOS --->
 const jugadorSchema = new mongoose.Schema({
     nombre: { type: String, required: true, unique: true },
-    es_creador: { type: Boolean, default: false } // Por defecto nadie es creador
+    es_creador: { type: Boolean, default: false }
 });
 const Jugador = mongoose.model('Jugador', jugadorSchema);
 
-// <--- CONFIGURACIÓN DEL SERVIDOR WEB --->
+// <--- SERVIDOR WEB PREPARADO PARA RECIBIR ÓRDENES DEL HTML --->
 const server = http.createServer((req, res) => {
+    // Dar permisos para que tu HTML local pueda comunicarse con el servidor (CORS)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        return res.end();
+    }
+
+    if (req.method === 'POST' && req.url === '/api/verificar') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            try {
+                const { nombre, es_creador } = JSON.parse(body);
+                const jugador = await Jugador.findOneAndUpdate({ nombre: nombre }, { es_creador: es_creador }, { new: true });
+                
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                if (jugador) {
+                    res.end(JSON.stringify({ mensaje: `¡El jugador ${nombre} ${es_creador ? 'ahora ES CREADOR' : 'ya NO ES creador'}.` }));
+                } else {
+                    res.end(JSON.stringify({ mensaje: `Error: El jugador ${nombre} no existe.` }));
+                }
+            } catch (error) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ mensaje: 'Error en el servidor.' }));
+            }
+        });
+        return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Servidor PvP Godot activo con Base de Datos\n');
 });
 
+// <--- TU SISTEMA MULTIJUGADOR INTACTO --->
 const wss = new WebSocket.Server({ server });
 let rooms = [];
 let nextClientId = 1;
@@ -82,30 +113,23 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
-            // <--- NUEVO: SISTEMA DE LOGIN / PERFIL --->
             if (data.type === "login") {
                 let nombreBuscado = data.nombre || `JUGADOR_${clientId}`;
-                
-                // Busca al jugador en la base de datos
                 let jugadorDB = await Jugador.findOne({ nombre: nombreBuscado });
                 
-                // Si no existe, lo crea
                 if (!jugadorDB) {
                     jugadorDB = new Jugador({ nombre: nombreBuscado, es_creador: false });
                     await jugadorDB.save();
-                    console.log(`Nuevo jugador registrado: ${nombreBuscado}`);
                 }
 
-                // Le envía los datos de vuelta a Godot
                 ws.send(JSON.stringify({
                     type: 'datos_perfil',
                     nombre: jugadorDB.nombre,
                     es_creador: jugadorDB.es_creador
                 }));
-                return; // Evita que este mensaje vaya a la sala de combate
+                return; 
             }
 
-            // <--- LÓGICA DE COMBATE ORIGINAL --->
             const currentRoom = rooms.find(r => r.id === ws.roomId);
             if (!currentRoom) return;
 
@@ -159,4 +183,4 @@ wss.on('connection', (ws) => {
 server.listen(PORT, () => {
     console.log(`Servidor escuchando en puerto ${PORT}`);
 });
-                        
+            
