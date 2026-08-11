@@ -4,10 +4,10 @@ const mongoose = require('mongoose');
 
 const PORT = process.env.PORT || 10000;
 
-// <--- CONEXIÓN A MONGODB ATLAS --->
-const mongoURI = "mongodb+srv://blopex67_db_user:PBrsW7s4rxSjAMHb@cluster0.hhjrdwk.mongodb.net/?appName=Cluster0"; 
+// <--- CONEXIÓN A MONGODB ATLAS (CONTRASEÑA ACTUALIZADA) --->
+const mongoURI = "mongodb+srv://blopex67_db_user:Project_ZS@cluster0.hhjrdwk.mongodb.net/?appName=Cluster0"; 
 
-mongoose.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
+mongoose.connect(mongoURI)
     .then(() => console.log('Conectado a la base de datos MongoDB'))
     .catch(err => console.error('Error al conectar a MongoDB:', err));
 
@@ -81,7 +81,6 @@ const server = http.createServer((req, res) => {
         return res.end();
     }
 
-    // Si entras a la página principal, te muestra el panel de control
     if (req.method === 'GET' && req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(panelHTML);
@@ -113,7 +112,7 @@ const server = http.createServer((req, res) => {
     res.end('Ruta no encontrada');
 });
 
-// <--- TU SISTEMA MULTIJUGADOR INTACTO --->
+// <--- SISTEMA MULTIJUGADOR --->
 const wss = new WebSocket.Server({ server });
 let rooms = [];
 let nextClientId = 1;
@@ -241,4 +240,4 @@ wss.on('connection', (ws) => {
 server.listen(PORT, () => {
     console.log(`Servidor escuchando en puerto ${PORT}`);
 });
-                    
+        
