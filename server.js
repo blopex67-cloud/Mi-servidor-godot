@@ -1,13 +1,85 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
 const WebSocket = require('ws');
 const http = require('http');
 
+// --- 1. CONFIGURACIÓN DEL SERVIDOR Y EXPRESS ---
 const PORT = process.env.PORT || 10000;
+const JWT_SECRET = process.env.JWT_SECRET || "mi_clave_super_secreta_para_el_juego";
 
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Servidor PvP Godot activo\n');
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+const server = http.createServer(app); // Express maneja las peticiones HTTP normales
+
+// --- 2. CONEXIÓN A MONGODB ---
+mongoose.connect('mongodb://localhost:27017/mi_juego_db')
+    .then(() => console.log("MongoDB conectado"))
+    .catch(err => console.error("Error conectando a MongoDB:", err));
+
+const userSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true }
+});
+const User = mongoose.model('User', userSchema);
+
+// --- 3. RUTAS HTTP (SISTEMA DE CUENTAS) ---
+app.get('/', (req, res) => {
+    res.send('Servidor PvP y Cuentas Godot activo\n');
 });
 
+app.post('/register', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = new User({ email, password: hashedPassword });
+        await newUser.save();
+        
+        const token = jwt.sign({ id: newUser._id }, JWT_SECRET, { expiresIn: '30d' });
+        res.status(201).json({ message: "Cuenta creada", token: token });
+    } catch (error) {
+        res.status(400).json({ error: "El correo ya está en uso o datos inválidos" });
+    }
+});
+
+app.post('/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await User.findOne({ email });
+        
+        if (!user) return res.status(404).json({ error: "Correo no encontrado" });
+        
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(401).json({ error: "Contraseña incorrecta" });
+
+        const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '30d' });
+        res.status(200).json({ message: "Login exitoso", token: token });
+    } catch (error) {
+        res.status(500).json({ error: "Error en el servidor" });
+    }
+});
+
+app.post('/verify_token', async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(401).json({ error: "No hay token" });
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const user = await User.findById(decoded.id);
+        if (!user) return res.status(404).json({ error: "Usuario no existe" });
+
+        res.status(200).json({ message: "Token válido", email: user.email });
+    } catch (error) {
+        res.status(401).json({ error: "Token inválido o expirado" });
+    }
+});
+
+// --- 4. SERVIDOR WEBSOCKET (SISTEMA PVP) ---
+// Conectamos WebSockets al mismo servidor HTTP
 const wss = new WebSocket.Server({ server });
 let rooms = [];
 let nextClientId = 1;
@@ -50,7 +122,7 @@ wss.on('connection', (ws) => {
     const spawnIndex = usedSpawns.includes(0) ? 1 : 0;
 
     room.players.push({ id: clientId, ws, spawnIndex });
-    room.scores[clientId] = 0; // Iniciar puntaje en 0
+    room.scores[clientId] = 0;
 
     ws.clientId = clientId;
     ws.roomId = room.id;
@@ -72,14 +144,12 @@ wss.on('connection', (ws) => {
             const currentRoom = rooms.find(r => r.id === ws.roomId);
             if (!currentRoom) return;
 
-            // Si un jugador muere, procesamos la ronda
             if (data.type === "player_died") {
                 const killerId = data.killer;
                 if (currentRoom.scores[killerId] !== undefined) {
                     currentRoom.scores[killerId] += 1;
                 }
                 
-                // Determinar quién va ganando
                 let kingId = null;
                 let maxScore = -1;
                 for (let pid in currentRoom.scores) {
@@ -87,13 +157,12 @@ wss.on('connection', (ws) => {
                         maxScore = currentRoom.scores[pid];
                         kingId = pid;
                     } else if (currentRoom.scores[pid] === maxScore) {
-                        kingId = null; // Empate, no hay rey
+                        kingId = null;
                     }
                 }
 
-                currentRoom.round += 1; // Siguiente ronda
+                currentRoom.round += 1;
                 
-                // Avisar a todos que la ronda terminó
                 broadcastToRoom(currentRoom, {
                     type: 'round_ended',
                     round: currentRoom.round,
@@ -123,7 +192,8 @@ wss.on('connection', (ws) => {
     });
 });
 
+// --- 5. INICIAR EL SERVIDOR COMPLETO ---
 server.listen(PORT, () => {
-    console.log(`Servidor escuchando en puerto ${PORT}`);
+    console.log(`Servidor maestro (HTTP + WebSocket) escuchando en puerto ${PORT}`);
 });
-
+            
