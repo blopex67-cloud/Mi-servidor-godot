@@ -19,7 +19,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // NUEVO ENDPOINT: VER TODOS LOS JUGADORES
+    // ENDPOINT: VER TODOS LOS JUGADORES
     if (req.method === 'GET' && req.url === '/api/all_players') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(playerActivity));
@@ -104,6 +104,48 @@ const server = http.createServer((req, res) => {
                 } else {
                     res.writeHead(404, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ message: `El jugador no estaba baneado.` }));
+                }
+            } catch (error) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ message: "Error del servidor." }));
+            }
+        });
+        return;
+    }
+
+    // ========================================================
+    // NUEVO ENDPOINT PARA ENVIAR DIAMANTES DESDE EL ADMIN PANEL
+    // ========================================================
+    if (req.method === 'POST' && req.url === '/api/diamantes') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', () => {
+            try {
+                const data = JSON.parse(body);
+                const targetName = data.playerName;
+                const amount = data.amount;
+
+                if (!targetName || !amount) {
+                    return res.end(JSON.stringify({ message: "Falta el nombre o la cantidad." }));
+                }
+
+                let enviado = false;
+
+                // Buscamos al jugador en las salas para mandarle los diamantes en vivo
+                for (const room of rooms) {
+                    const player = room.players.find(p => p.name === targetName);
+                    if (player && player.ws.readyState === WebSocket.OPEN) {
+                        player.ws.send(JSON.stringify({ type: 'add_diamantes', amount: amount }));
+                        enviado = true;
+                        break;
+                    }
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                if (enviado) {
+                    res.end(JSON.stringify({ message: `¡Se inyectaron ${amount} diamantes en vivo a ${targetName}!` }));
+                } else {
+                    res.end(JSON.stringify({ message: `El jugador ${targetName} no está jugando ahora mismo. (Debe estar online)` }));
                 }
             } catch (error) {
                 res.writeHead(500);
