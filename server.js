@@ -6,16 +6,40 @@ const PORT = process.env.PORT || 10000;
 let clientIdCounter = 1;
 let rooms = []; 
 let bannedNames = {}; 
+let playerActivity = {}; // <-- NUEVO: Guarda la última actividad de los jugadores
 
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(200);
         res.end();
         return;
+    }
+
+    // NUEVO ENDPOINT: VER ESTADO Y ÚLTIMA CONEXIÓN
+    if (req.method === 'GET' && req.url.startsWith('/api/status')) {
+        const urlParams = new URLSearchParams(req.url.split('?')[1]);
+        const playerName = urlParams.get('playerName');
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        
+        if (!playerName) {
+            return res.end(JSON.stringify({ message: "Falta el nombre." }));
+        }
+
+        const activity = playerActivity[playerName];
+        if (!activity) {
+            return res.end(JSON.stringify({ message: `No hay registros del jugador ${playerName} desde que el servidor se inició.` }));
+        }
+
+        if (activity.online) {
+            return res.end(JSON.stringify({ message: `🟢 ${playerName} está JUGANDO AHORA MISMO.` }));
+        } else {
+            return res.end(JSON.stringify({ message: `🔴 ${playerName} está desconectado. Última vez visto: ${activity.lastSeen}` }));
+        }
     }
 
     // ENDPOINT PARA BANEAR
@@ -29,12 +53,11 @@ const server = http.createServer((req, res) => {
                 const reason = data.reason || "Violación de las reglas";
 
                 if (!playerNameToBan) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ message: "Falta el nombre del jugador." }));
-                    return;
+                    return res.end(JSON.stringify({ message: "Falta el nombre del jugador." }));
                 }
 
                 bannedNames[playerNameToBan] = reason; 
+                let estabaConectado = false;
 
                 for (const room of rooms) {
                     const playerIndex = room.players.findIndex(p => p.name === playerNameToBan);
@@ -44,13 +67,17 @@ const server = http.createServer((req, res) => {
                             player.ws.send(JSON.stringify({ type: 'banned', reason: reason }));
                             player.ws.close(); 
                         }
+                        estabaConectado = true;
                         break; 
                     }
                 }
 
-                console.log(`[BAN] Jugador ${playerNameToBan} baneado.`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: `Jugador ${playerNameToBan} baneado.` }));
+                if (estabaConectado) {
+                    res.end(JSON.stringify({ message: `¡BAM! ${playerNameToBan} estaba jugando y fue expulsado y baneado.` }));
+                } else {
+                    res.end(JSON.stringify({ message: `${playerNameToBan} añadido a la lista negra (no estaba conectado).` }));
+                }
             } catch (error) {
                 res.writeHead(500);
                 res.end(JSON.stringify({ message: "Error del servidor." }));
@@ -68,21 +95,13 @@ const server = http.createServer((req, res) => {
                 const data = JSON.parse(body);
                 const playerNameToUnban = data.playerName; 
 
-                if (!playerNameToUnban) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ message: "Falta el nombre del jugador." }));
-                    return;
-                }
-
-                // Eliminar de la lista negra
                 if (bannedNames[playerNameToUnban]) {
                     delete bannedNames[playerNameToUnban];
-                    console.log(`[UNBAN] Jugador ${playerNameToUnban} desbaneado.`);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ message: `Jugador ${playerNameToUnban} desbaneado con éxito.` }));
                 } else {
                     res.writeHead(404, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ message: `El jugador ${playerNameToUnban} no estaba baneado.` }));
+                    res.end(JSON.stringify({ message: `El jugador no estaba baneado.` }));
                 }
             } catch (error) {
                 res.writeHead(500);
@@ -116,6 +135,9 @@ wss.on('connection', (ws) => {
                     ws.close();
                     return;
                 }
+
+                // <-- NUEVO: Guardar que está ONLINE
+                playerActivity[playerName] = { online: true, lastSeen: "Ahora mismo" };
 
                 currentRoom = rooms.find(r => r.players.length < 2);
                 if (!currentRoom) {
@@ -161,6 +183,13 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
+        // <-- NUEVO: Guardar fecha y hora cuando se va
+        if (playerName) {
+            const fecha = new Date();
+            const fechaLegible = fecha.toLocaleString('es-ES', { timeZone: 'America/Mexico_City' }); // Ajusta a tu zona horaria si quieres
+            playerActivity[playerName] = { online: false, lastSeen: fechaLegible };
+        }
+
         if (currentRoom) {
             currentRoom.players = currentRoom.players.filter(p => p.id !== clientId);
             const otherPlayer = currentRoom.players.find(p => p.id !== clientId);
