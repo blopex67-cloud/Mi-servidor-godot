@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 10000;
 let clientIdCounter = 1;
 let rooms = []; 
 let bannedNames = {}; 
-let playerActivity = {}; // <-- NUEVO: Guarda la última actividad de los jugadores
+let playerActivity = {}; 
 
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,21 +19,23 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // NUEVO ENDPOINT: VER ESTADO Y ÚLTIMA CONEXIÓN
+    // NUEVO ENDPOINT: VER TODOS LOS JUGADORES
+    if (req.method === 'GET' && req.url === '/api/all_players') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(playerActivity));
+    }
+
+    // ENDPOINT: VER ESTADO DE UN JUGADOR
     if (req.method === 'GET' && req.url.startsWith('/api/status')) {
         const urlParams = new URLSearchParams(req.url.split('?')[1]);
         const playerName = urlParams.get('playerName');
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         
-        if (!playerName) {
-            return res.end(JSON.stringify({ message: "Falta el nombre." }));
-        }
+        if (!playerName) return res.end(JSON.stringify({ message: "Falta el nombre." }));
 
         const activity = playerActivity[playerName];
-        if (!activity) {
-            return res.end(JSON.stringify({ message: `No hay registros del jugador ${playerName} desde que el servidor se inició.` }));
-        }
+        if (!activity) return res.end(JSON.stringify({ message: `No hay registros de ${playerName}.` }));
 
         if (activity.online) {
             return res.end(JSON.stringify({ message: `🟢 ${playerName} está JUGANDO AHORA MISMO.` }));
@@ -76,7 +78,7 @@ const server = http.createServer((req, res) => {
                 if (estabaConectado) {
                     res.end(JSON.stringify({ message: `¡BAM! ${playerNameToBan} estaba jugando y fue expulsado y baneado.` }));
                 } else {
-                    res.end(JSON.stringify({ message: `${playerNameToBan} añadido a la lista negra (no estaba conectado).` }));
+                    res.end(JSON.stringify({ message: `${playerNameToBan} añadido a la lista negra.` }));
                 }
             } catch (error) {
                 res.writeHead(500);
@@ -129,14 +131,12 @@ wss.on('connection', (ws) => {
             if (data.type === "register_name") {
                 playerName = data.name || `Jugador${clientId}`;
 
-                // VERIFICAR BAN
                 if (bannedNames[playerName]) {
                     ws.send(JSON.stringify({ type: 'banned', reason: bannedNames[playerName] }));
                     ws.close();
                     return;
                 }
 
-                // <-- NUEVO: Guardar que está ONLINE
                 playerActivity[playerName] = { online: true, lastSeen: "Ahora mismo" };
 
                 currentRoom = rooms.find(r => r.players.length < 2);
@@ -183,10 +183,9 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        // <-- NUEVO: Guardar fecha y hora cuando se va
         if (playerName) {
             const fecha = new Date();
-            const fechaLegible = fecha.toLocaleString('es-ES', { timeZone: 'America/Mexico_City' }); // Ajusta a tu zona horaria si quieres
+            const fechaLegible = fecha.toLocaleString('es-ES', { timeZone: 'America/Mexico_City' });
             playerActivity[playerName] = { online: false, lastSeen: fechaLegible };
         }
 
