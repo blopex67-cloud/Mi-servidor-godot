@@ -1,146 +1,179 @@
-const WebSocket = require('ws');
 const http = require('http');
+const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 10000;
 
-let rooms = [];
-let nextClientId = 1;
-let nextRoomNumber = 1;
-let bannedIPs = {}; // Guarda las IPs baneadas
+let clientIdCounter = 1;
+let rooms = []; 
+let bannedNames = {}; 
 
 const server = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*'); 
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
 
-    // ENDPOINT PARA BANEAR (Por Nombre de Usuario)
+    // ENDPOINT PARA BANEAR
     if (req.method === 'POST' && req.url === '/api/ban') {
         let body = '';
         req.on('data', chunk => body += chunk.toString());
         req.on('end', () => {
-            const data = JSON.parse(body);
-            const playerNameToBan = data.playerName; 
-            const reason = data.reason || "Violación de las reglas";
+            try {
+                const data = JSON.parse(body);
+                const playerNameToBan = data.playerName; 
+                const reason = data.reason || "Violación de las reglas";
 
-            let playerBanned = false;
-
-            for (const room of rooms) {
-                // Buscamos al jugador por su NOMBRE
-                const playerIndex = room.players.findIndex(p => p.name === playerNameToBan);
-                
-                if (playerIndex !== -1) {
-                    const player = room.players[playerIndex];
-                    const playerIP = player.ws._socket.remoteAddress; // Tomamos su IP
-                    
-                    bannedIPs[playerIP] = reason; // Baneamos la IP
-
-                    if (player.ws.readyState === WebSocket.OPEN) {
-                        player.ws.send(JSON.stringify({ type: 'banned', reason: reason }));
-                        player.ws.close(); 
-                    }
-                    playerBanned = true;
-                    break;
+                if (!playerNameToBan) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ message: "Falta el nombre del jugador." }));
+                    return;
                 }
-            }
 
-            if (playerBanned) {
-                console.log(`[BAN] Jugador ${playerNameToBan} baneado permanentemente por IP.`);
+                bannedNames[playerNameToBan] = reason; 
+
+                for (const room of rooms) {
+                    const playerIndex = room.players.findIndex(p => p.name === playerNameToBan);
+                    if (playerIndex !== -1) {
+                        const player = room.players[playerIndex];
+                        if (player.ws.readyState === WebSocket.OPEN) {
+                            player.ws.send(JSON.stringify({ type: 'banned', reason: reason }));
+                            player.ws.close(); 
+                        }
+                        break; 
+                    }
+                }
+
+                console.log(`[BAN] Jugador ${playerNameToBan} baneado.`);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: "Baneado permanentemente" }));
-            } else {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: "No se encontró a ese jugador conectado" }));
+                res.end(JSON.stringify({ message: `Jugador ${playerNameToBan} baneado.` }));
+            } catch (error) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ message: "Error del servidor." }));
             }
         });
         return;
     }
 
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Servidor activo\n');
+    // ENDPOINT PARA DESBANEAR
+    if (req.method === 'POST' && req.url === '/api/unban') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', () => {
+            try {
+                const data = JSON.parse(body);
+                const playerNameToUnban = data.playerName; 
+
+                if (!playerNameToUnban) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ message: "Falta el nombre del jugador." }));
+                    return;
+                }
+
+                // Eliminar de la lista negra
+                if (bannedNames[playerNameToUnban]) {
+                    delete bannedNames[playerNameToUnban];
+                    console.log(`[UNBAN] Jugador ${playerNameToUnban} desbaneado.`);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ message: `Jugador ${playerNameToUnban} desbaneado con éxito.` }));
+                } else {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ message: `El jugador ${playerNameToUnban} no estaba baneado.` }));
+                }
+            } catch (error) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ message: "Error del servidor." }));
+            }
+        });
+        return;
+    }
+
+    res.writeHead(404);
+    res.end();
 });
 
 const wss = new WebSocket.Server({ server });
 
-function findOrCreateRoom() {
-    let room = rooms.find(r => r.players.length < 2);
-    if (!room) {
-        room = { id: `room_${nextRoomNumber++}`, players: [], round: 1, scores: {} };
-        rooms.push(room);
-    }
-    return room;
-}
-
-function broadcastToRoom(room, messageObj, excludeClientId = null) {
-    const msg = JSON.stringify(messageObj);
-    for (const player of room.players) {
-        if (player.id !== excludeClientId && player.ws.readyState === WebSocket.OPEN) {
-            player.ws.send(msg);
-        }
-    }
-}
-
-wss.on('connection', (ws, req) => {
-    // Verificar IP al instante
-    const clientIP = req.socket.remoteAddress;
-    if (bannedIPs[clientIP]) {
-        ws.send(JSON.stringify({ type: 'banned', reason: bannedIPs[clientIP] }));
-        ws.close();
-        return;
-    }
-
-    const clientId = nextClientId++;
-    ws.clientId = clientId;
-    ws.isLoggedIn = false;
+wss.on('connection', (ws) => {
+    const clientId = clientIdCounter++;
+    let currentRoom = null;
+    let playerName = "";
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
-            // Registrar al jugador con su nombre
-            if (data.type === "join_game" || data.type === "register_name") {
-                ws.isLoggedIn = true;
-                const playerName = data.name || `Jugador${clientId}`;
-                
-                const room = findOrCreateRoom();
-                if (room.players.length >= 2) {
-                    ws.send(JSON.stringify({ type: 'room_full' }));
+            if (data.type === "register_name") {
+                playerName = data.name || `Jugador${clientId}`;
+
+                // VERIFICAR BAN
+                if (bannedNames[playerName]) {
+                    ws.send(JSON.stringify({ type: 'banned', reason: bannedNames[playerName] }));
                     ws.close();
                     return;
                 }
 
-                const usedSpawns = room.players.map(p => p.spawnIndex);
-                const spawnIndex = usedSpawns.includes(0) ? 1 : 0;
+                currentRoom = rooms.find(r => r.players.length < 2);
+                if (!currentRoom) {
+                    currentRoom = { id: `room_${Date.now()}`, players: [], round: 1 };
+                    rooms.push(currentRoom);
+                }
 
-                // AQUI GUARDAMOS EL NOMBRE EN EL SERVIDOR
-                room.players.push({ id: clientId, name: playerName, ws, spawnIndex });
-                room.scores[clientId] = 0; 
-                ws.roomId = room.id;
+                const spawnIndex = currentRoom.players.length; 
+                const newPlayer = { id: clientId, ws: ws, name: playerName, spawn_index: spawnIndex };
+                currentRoom.players.push(newPlayer);
 
-                ws.send(JSON.stringify({ type: 'welcome', id: clientId, room: room.id, spawn_index: spawnIndex }));
-                broadcastToRoom(room, { type: 'player_joined', id: clientId, name: playerName, spawn_index: spawnIndex }, clientId);
+                ws.send(JSON.stringify({
+                    type: 'welcome',
+                    id: clientId,
+                    room: currentRoom.id,
+                    spawn_index: spawnIndex,
+                    round: currentRoom.round
+                }));
+
+                const otherPlayer = currentRoom.players.find(p => p.id !== clientId);
+                if (otherPlayer) {
+                    otherPlayer.ws.send(JSON.stringify({ type: 'player_joined', id: clientId, spawn_index: spawnIndex }));
+                    ws.send(JSON.stringify({ type: 'player_joined', id: otherPlayer.id, spawn_index: otherPlayer.spawn_index }));
+                }
                 return;
             }
 
-            if (!ws.isLoggedIn) return; // Ignorar si no ha enviado su nombre
-
-            const currentRoom = rooms.find(r => r.id === ws.roomId);
-            if (!currentRoom) return;
-
-            data.id = clientId;
-            broadcastToRoom(currentRoom, data, clientId);
-
-        } catch (error) { console.error(error); }
+            if (currentRoom) {
+                const otherPlayer = currentRoom.players.find(p => p.id !== clientId);
+                if (otherPlayer && otherPlayer.ws.readyState === WebSocket.OPEN) {
+                    if (["move", "shoot", "stop_shoot", "reload", "damage"].includes(data.type)) {
+                        data.id = clientId; 
+                        otherPlayer.ws.send(JSON.stringify(data));
+                    } else if (data.type === "round_ended") {
+                        currentRoom.round = parseInt(data.round) + 1;
+                        otherPlayer.ws.send(JSON.stringify(data));
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(error);
+        }
     });
 
     ws.on('close', () => {
-        const currentRoom = rooms.find(r => r.id === ws.roomId);
-        if (!currentRoom) return;
-        currentRoom.players = currentRoom.players.filter(p => p.id !== clientId);
-        broadcastToRoom(currentRoom, { type: 'player_left', id: clientId });
-        if (currentRoom.players.length === 0) rooms = rooms.filter(r => r.id !== currentRoom.id);
+        if (currentRoom) {
+            currentRoom.players = currentRoom.players.filter(p => p.id !== clientId);
+            const otherPlayer = currentRoom.players.find(p => p.id !== clientId);
+            if (otherPlayer && otherPlayer.ws.readyState === WebSocket.OPEN) {
+                otherPlayer.ws.send(JSON.stringify({ type: 'player_left', id: clientId }));
+            }
+            if (currentRoom.players.length === 0) {
+                rooms = rooms.filter(r => r.id !== currentRoom.id);
+            }
+        }
     });
 });
 
-server.listen(PORT, () => console.log(`Servidor en puerto ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`Servidor de juego y panel Admin escuchando en el puerto ${PORT}`);
+});
