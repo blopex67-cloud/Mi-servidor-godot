@@ -7,6 +7,7 @@ let clientIdCounter = 1;
 let rooms = []; 
 let bannedNames = {}; 
 let playerActivity = {}; 
+let pendingDiamonds = {}; // <-- NUEVO: Buzón para diamantes de jugadores offline
 
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -54,9 +55,7 @@ const server = http.createServer((req, res) => {
                 const playerNameToBan = data.playerName; 
                 const reason = data.reason || "Violación de las reglas";
 
-                if (!playerNameToBan) {
-                    return res.end(JSON.stringify({ message: "Falta el nombre del jugador." }));
-                }
+                if (!playerNameToBan) return res.end(JSON.stringify({ message: "Falta el nombre." }));
 
                 bannedNames[playerNameToBan] = reason; 
                 let estabaConectado = false;
@@ -100,7 +99,7 @@ const server = http.createServer((req, res) => {
                 if (bannedNames[playerNameToUnban]) {
                     delete bannedNames[playerNameToUnban];
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ message: `Jugador ${playerNameToUnban} desbaneado con éxito.` }));
+                    res.end(JSON.stringify({ message: `Jugador ${playerNameToUnban} desbaneado.` }));
                 } else {
                     res.writeHead(404, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ message: `El jugador no estaba baneado.` }));
@@ -113,9 +112,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // ========================================================
-    // NUEVO ENDPOINT PARA ENVIAR DIAMANTES DESDE EL ADMIN PANEL
-    // ========================================================
+    // ENDPOINT PARA ENVIAR DIAMANTES (ONLINE U OFFLINE)
     if (req.method === 'POST' && req.url === '/api/diamantes') {
         let body = '';
         req.on('data', chunk => body += chunk.toString());
@@ -123,29 +120,37 @@ const server = http.createServer((req, res) => {
             try {
                 const data = JSON.parse(body);
                 const targetName = data.playerName;
-                const amount = data.amount;
+                const amount = parseInt(data.amount);
 
                 if (!targetName || !amount) {
                     return res.end(JSON.stringify({ message: "Falta el nombre o la cantidad." }));
                 }
 
-                let enviado = false;
+                let enviadoOnline = false;
 
-                // Buscamos al jugador en las salas para mandarle los diamantes en vivo
+                // Buscamos si está online para mandárselos de inmediato
                 for (const room of rooms) {
                     const player = room.players.find(p => p.name === targetName);
                     if (player && player.ws.readyState === WebSocket.OPEN) {
                         player.ws.send(JSON.stringify({ type: 'add_diamantes', amount: amount }));
-                        enviado = true;
+                        enviadoOnline = true;
                         break;
                     }
                 }
 
+                // Si no estaba online, los guardamos en su buzón de pendientes
+                if (!enviadoOnline) {
+                    if (!pendingDiamonds[targetName]) {
+                        pendingDiamonds[targetName] = 0;
+                    }
+                    pendingDiamonds[targetName] += amount;
+                }
+
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                if (enviado) {
-                    res.end(JSON.stringify({ message: `¡Se inyectaron ${amount} diamantes en vivo a ${targetName}!` }));
+                if (enviadoOnline) {
+                    res.end(JSON.stringify({ message: `¡Se enviaron ${amount} diamantes EN VIVO a ${targetName}!` }));
                 } else {
-                    res.end(JSON.stringify({ message: `El jugador ${targetName} no está jugando ahora mismo. (Debe estar online)` }));
+                    res.end(JSON.stringify({ message: `${targetName} está offline. Se le guardaron ${amount} diamantes para cuando inicie sesión.` }));
                 }
             } catch (error) {
                 res.writeHead(500);
@@ -173,6 +178,7 @@ wss.on('connection', (ws) => {
             if (data.type === "register_name") {
                 playerName = data.name || `Jugador${clientId}`;
 
+                // Verificar ban
                 if (bannedNames[playerName]) {
                     ws.send(JSON.stringify({ type: 'banned', reason: bannedNames[playerName] }));
                     ws.close();
@@ -180,6 +186,14 @@ wss.on('connection', (ws) => {
                 }
 
                 playerActivity[playerName] = { online: true, lastSeen: "Ahora mismo" };
+
+                // ========================================================
+                // NUEVO: Revisar si tiene diamantes pendientes (offline)
+                // ========================================================
+                if (pendingDiamonds[playerName] && pendingDiamonds[playerName] > 0) {
+                    ws.send(JSON.stringify({ type: 'add_diamantes', amount: pendingDiamonds[playerName] }));
+                    pendingDiamonds[playerName] = 0; // Vaciamos el buzón porque ya se los entregamos
+                }
 
                 currentRoom = rooms.find(r => r.players.length < 2);
                 if (!currentRoom) {
